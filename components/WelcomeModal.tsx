@@ -8,8 +8,8 @@ const TOUR_KEY = "vectrig_tour_done";
 const FEATURES: Array<{ icon: string; title: string; body: string }> = [
   {
     icon: "✏",
-    title: "Rysowanie ścian",
-    body: "Użyj gotowych kształtów lub ołówka — w trybie rysowania możesz klikać w istniejące ściany, aby je łamać i kontynuować nową linią.",
+    title: "Rysowanie modelu",
+    body: "To jest główna ścieżka w tej prezentacji: szkicujesz obrys w naszej nomenklaturze (typy ścian, piętra, otwory). Od tego modelu idzie wycena i — co kluczowe — generowanie DXF z ustalonymi warstwami i zakresem.",
   },
   {
     icon: "🪟",
@@ -43,8 +43,13 @@ const FEATURES: Array<{ icon: string; title: string; body: string }> = [
   },
   {
     icon: "📤",
-    title: "Eksport DXF",
-    body: "Wszystko — rzuty, stropy, dach, schody i zestawienie paneli — wyeksportujesz do DXF gotowego pod AutoCAD.",
+    title: "Generowanie DXF",
+    body: "Z modelu zbudowanego w konfiguratorze powstaje plik DXF zgodny z naszą strukturą warstw i wybranym zakresem (ściany, stropy, dach, schody, zestawienie itd.). Przy pracy już w tej nomenklaturze macie możliwość dopasowania oczekiwań wobec wyjścia do CAD/CAM — to przewidywalna ścieżka produkcyjna.",
+  },
+  {
+    icon: "📥",
+    title: "Import DXF",
+    body: "Pełny import z rynku to osobny, szeroki temat: różne biura, wersje plików i scenariusze — produkcyjnie łączymy to w spójny przepływ i nad tym pracujemy. W tej wersji pokazowej import jest uproszczony; najpewniejszy obieg to wczytanie DXF wygenerowanego z tej samej aplikacji — wspólna nomenklatura warstw, ten sam kontekst.",
   },
 ];
 
@@ -96,15 +101,17 @@ export default function WelcomeModal() {
           <div className="flex items-baseline gap-3">
             <div className="text-2xl font-bold tracking-tight">Vectrig</div>
             <div className="text-xs uppercase tracking-widest text-accent">
-              demo
+              wersja pokazowa
             </div>
           </div>
           <h1 className="text-xl font-semibold mt-2">
             Witaj w konfiguratorze domów z CLT
           </h1>
           <p className="text-sm text-muted mt-1">
-            Zaprojektuj budynek, dobierz technologię, okna i dach, a my policzymy
-            materiał, odpad i czas CNC. Wynik wyeksportujesz do DXF.
+            Pokazujemy przede wszystkim <strong>rysowanie modelu i generowanie DXF</strong> na
+            naszej nomenklaturze — to daje przewidywalny plik wyjściowy.{" "}
+            <strong>Import</strong> cudzych DXF w pełnej produkcji jest świadomie rozbudowany
+            pod wiele scenariuszy; tutaj jest uproszczony, z myślą o obrocie z własnym eksportem.
           </p>
         </div>
 
@@ -112,11 +119,23 @@ export default function WelcomeModal() {
         <div className="p-5 border-b border-border bg-amber-500/5">
           <div className="flex gap-3">
             <div className="text-amber-400 text-lg leading-none">⚠</div>
-            <div className="text-xs text-amber-100/90 leading-relaxed">
-              <strong className="text-amber-200">To jest wersja demonstracyjna.</strong>{" "}
-              Projekt żyje w przeglądarce i <em>nie jest zapisywany</em> na
-              serwerze (brak podpiętej bazy danych). Aby zachować pracę — wyeksportuj
-              DXF. Zmiany w cenniku wracają do wartości domyślnych po odświeżeniu.
+            <div className="text-xs text-amber-100/90 leading-relaxed space-y-2">
+              <p>
+                <strong className="text-amber-200">To nie jest pełny produkt</strong> — jest to{" "}
+                <strong>wersja pokazowa opracowana na podstawie naszej wiedzy</strong> i
+                doświadczenia projektowego. Docelowa, produkcyjna wersja Vectrig jest{" "}
+                <em>znacznie bardziej rozbudowana</em> i obejmuje wiele funkcji wykraczających
+                poza ten pokaz.
+              </p>
+              <p>
+                <strong>Cel tej prezentacji</strong> — pokazać{" "}
+                <em>rysowanie → model → generowanie DXF</em> w ustalonej konwencji warstw i typów,
+                tak aby plik wyjściowy dało się sensownie zapiąć z oczekiwaniami produkcyjnymi.
+                Import obcych podkładów w pełnym produkcie wymaga szerszej obsługi przypadków —
+                tu pokazujemy kierunek; najprostsza pętla w demo to eksport i ponowny import
+                tego samego pliku. Projekt w przeglądarce <em>nie jest zapisywany</em> na serwerze;
+                aby zachować wyniki, użyj eksportu DXF. Zmiany w cenniku wracają po odświeżeniu.
+              </p>
             </div>
           </div>
         </div>
@@ -124,7 +143,7 @@ export default function WelcomeModal() {
         {/* Features list */}
         <div className="p-5 border-b border-border">
           <div className="text-xs font-medium text-muted mb-3">
-            Co możesz zrobić w tym demo
+            Co obejmuje ta wersja pokazowa
           </div>
           <ul className="space-y-2.5">
             {FEATURES.map((f) => (
@@ -150,7 +169,7 @@ export default function WelcomeModal() {
             </li>
             <li>
               Kliknij w ścianę, aby dodać okna i drzwi — możesz też łamać ścianę
-              Alt+kliknięciem.
+              skrótem ⌥ / ⌘ / Ctrl + klik (Option / Command / Control).
             </li>
             <li>
               Otwórz <em>Zestawienie</em> i <em>Dach</em>, dopasuj cennik, a na koniec

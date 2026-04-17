@@ -1,8 +1,21 @@
 # Vectrig — Demo konfiguratora CLT
 
-Działająca aplikacja Next.js 14 + TypeScript pokazująca architekturę Vectrig:
-konfigurator ścian z podkładem DXF, biblioteką komponentów, żywym kosztorysem
-i generowaniem pliku produkcyjnego.
+Publiczna **wersja pokazowa** zbudowana na podstawie wiedzy zespołu — pełny produkt
+jest znacznie szerzej rozbudowany funkcjonalnie. Kod demonstruje architekturę aplikacji
+(Next.js 14 + TypeScript, katalog, kosztorys, generator DXF) oraz **dwa poziomy pracy z DXF**:
+
+### Rysowanie i generowanie (główna ścieżka w demo)
+
+Model powstaje w konfiguratorze w **naszej nomenklaturze** (typy ścian, warstwy semantyczne).
+`dxf-writer` składa plik wyjściowy z możliwością wyboru zakresu — to droga do **przewidywalnego**
+DXF zgodnego z ustalonymi oczekiwaniami (CAD/CAM).
+
+### Import DXF (szerszy temat produkcyjny)
+
+**Import** musi uwzględniać wiele scenariuszy (różne biura, konwencje warstw, wersje ACAD).
+W repozytorium jest uproszczony parser + mapowanie warstw w UI; pełna obsługa jest rozwijana
+w produkcie. Najprostszy spójny obieg w demo: **wygeneruj DXF z tej aplikacji i wczytaj go
+ponownie** — wspólna struktura z generatorem.
 
 ## Jak uruchomić
 

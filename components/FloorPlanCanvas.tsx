@@ -31,6 +31,36 @@ const ANGLE_SNAP_STEPS = [0, 45, 90, 135, 180, 225, 270, 315, 360];
 const VERTEX_HIT_PX = 10;
 const MIDPOINT_HIT_PX = 9;
 const MIN_HALF_LEN_MM = 100;
+/** Minimalny ruch myszy [px], zanim zacznie się przesuwanie ściany równolegle — sam klik tylko zaznacza. */
+const WALL_DRAG_THRESHOLD_PX = 8;
+
+type PendingWallDrag = {
+  wallIndex: number;
+  wallSnapshot: Wall;
+  mouseStart: Point;
+  clientStartX: number;
+  clientStartY: number;
+};
+
+function parallelWallAt(wall: Wall, mouseStart: Point, currentPlan: Point): Wall {
+  const dx = wall.end.x - wall.start.x;
+  const dy = wall.end.y - wall.start.y;
+  const len = Math.hypot(dx, dy) || 1;
+  const nx = -dy / len;
+  const ny = dx / len;
+  const offset =
+    (currentPlan.x - mouseStart.x) * nx + (currentPlan.y - mouseStart.y) * ny;
+  return moveWallParallel(wall, offset);
+}
+
+/** Podział ściany w miejscu kliknięcia. Na macOS zdarzenie „click” często nie ma ustawionego ⌥ (Option); `mousedown` jest wtedy niezawodniejszy — obsługujemy też ⌘ i Ctrl. */
+function wantsWallSplitModifier(e: {
+  altKey: boolean;
+  metaKey: boolean;
+  ctrlKey: boolean;
+}): boolean {
+  return e.altKey || e.metaKey || e.ctrlKey;
+}
 
 // ---------------------------------------------------------------------------
 // Click-to-click polyline draw state
@@ -72,6 +102,9 @@ export default function FloorPlanCanvas() {
   const hoveredVertexRef = useRef<{ wallIndex: number; which: "start" | "end"; point: Point } | null>(null);
   const hoveredMidWallIdxRef = useRef<number | null>(null);
   const dragStateRef = useRef<DragState | null>(null);
+  const pendingWallDragRef = useRef<PendingWallDrag | null>(null);
+  /** Po mousedown na korpusie ściany — zapobiega selectWall(null) na click, gdy puszczenie jest poza obrysem linii (inne współrzędne niż mousedown). */
+  const wallClickArmRef = useRef<string | null>(null);
   const drawStateRef = useRef<DrawState | null>(null);
   const drawToolRef = useRef<"select" | "draw">("select");
   const shiftHeldRef = useRef(false);
@@ -795,12 +828,15 @@ export default function FloorPlanCanvas() {
       // Priority 1: vertex
       const vHit = hitTestVertex(allWalls, px, py, vertexThreshMM);
       if (vHit) {
+        wallClickArmRef.current = null;
         pushUndo();
-        setDragState({
+        const newDrag: DragState = {
           target: { type: "vertex", ...vHit },
           startPos: { ...vHit.point },
           currentPos: { ...vHit.point },
-        });
+        };
+        dragStateRef.current = newDrag;
+        setDragState(newDrag);
         e.preventDefault();
         return;
       }
@@ -808,9 +844,10 @@ export default function FloorPlanCanvas() {
       // Priority 2: midpoint — edge resize along wall axis
       const mHit = hitTestWallMidpoint(allWalls, px, py, midThreshMM);
       if (mHit) {
+        wallClickArmRef.current = null;
         pushUndo();
         const w = allWalls[mHit.wallIndex];
-        setDragState({
+        const newDrag: DragState = {
           target: {
             type: "edge-resize",
             wallIndex: mHit.wallIndex,
@@ -821,32 +858,43 @@ export default function FloorPlanCanvas() {
           },
           startPos: { x: px, y: py },
           currentPos: { x: px, y: py },
-        });
+        };
+        dragStateRef.current = newDrag;
+        setDragState(newDrag);
         selectWall(w.id);
         e.preventDefault();
         return;
       }
 
-      // Priority 3: wall body — parallel offset
       const wallIdx = hitTestWall(allPositions, px, py, 500);
-      if (wallIdx >= 0) {
-        pushUndo();
+      // Podział ściany — rejestrujemy na mousedown (działa na Macu; sam „click” z ⌥ bywa odrzucany przez przeglądarkę)
+      if (wallIdx >= 0 && wantsWallSplitModifier(e)) {
+        wallClickArmRef.current = null;
         const wall = allWalls[wallIdx];
-        setDragState({
-          target: {
-            type: "wall",
-            wallIndex: wallIdx,
-            wallSnapshot: { ...wall },
-            mouseStart: { x: px, y: py },
-          },
-          startPos: { x: px, y: py },
-          currentPos: { x: px, y: py },
-        });
+        const proj = projectPointOntoSegment({ x: px, y: py }, wall.start, wall.end);
+        splitWall(activeFloor.id, wall.id, proj.point);
+        e.preventDefault();
+        return;
+      }
+
+      // Priority 3: korpus ściany — najpierw tylko zaznaczenie; przesuwanie równoległe po przekroczeniu progu ruchu (patrz mousemove)
+      if (wallIdx >= 0) {
+        const wall = allWalls[wallIdx];
+        pendingWallDragRef.current = {
+          wallIndex: wallIdx,
+          wallSnapshot: { ...wall },
+          mouseStart: { x: px, y: py },
+          clientStartX: e.clientX,
+          clientStartY: e.clientY,
+        };
+        wallClickArmRef.current = wall.id;
         selectWall(wall.id);
         e.preventDefault();
+      } else {
+        wallClickArmRef.current = null;
       }
     },
-    [drawTool, activeFloor, allWalls, allPositions, toPlan, getTransform, pushUndo, selectWall]
+    [drawTool, activeFloor, allWalls, allPositions, toPlan, getTransform, pushUndo, selectWall, splitWall]
   );
 
   const handleMouseMove = useCallback(
@@ -858,6 +906,40 @@ export default function FloorPlanCanvas() {
       const cy = e.clientY - rect.top;
       const cw = rect.width; const ch = rect.height;
       const { px, py } = toPlan(cx, cy, cw, ch);
+
+      // Oczekiwanie na próg ruchu przed przesunięciem równoległym (unika przypadkowych przesunięć przy kliknięciu)
+      const pw0 = pendingWallDragRef.current;
+      if (pw0 && activeFloor) {
+        const ddx = e.clientX - pw0.clientStartX;
+        const ddy = e.clientY - pw0.clientStartY;
+        if (ddx * ddx + ddy * ddy >= WALL_DRAG_THRESHOLD_PX * WALL_DRAG_THRESHOLD_PX) {
+          const snapped = snapPointFull({ x: px, y: py }, cw, ch);
+          pushUndo();
+          const newDrag: DragState = {
+            target: {
+              type: "wall",
+              wallIndex: pw0.wallIndex,
+              wallSnapshot: pw0.wallSnapshot,
+              mouseStart: pw0.mouseStart,
+            },
+            startPos: { ...pw0.mouseStart },
+            currentPos: snapped,
+          };
+          dragStateRef.current = newDrag;
+          setDragState(newDrag);
+          pendingWallDragRef.current = null;
+          wallClickArmRef.current = null;
+          const updateWall = useStore.getState().updateWall;
+          const moved = parallelWallAt(pw0.wallSnapshot, pw0.mouseStart, snapped);
+          updateWall(activeFloor.id, pw0.wallSnapshot.id, { start: moved.start, end: moved.end });
+          canvas.style.cursor = "grabbing";
+          draw();
+          return;
+        }
+        canvas.style.cursor = "grab";
+        draw();
+        return;
+      }
 
       // --- DRAGGING ---
       if (dragState) {
@@ -901,14 +983,7 @@ export default function FloorPlanCanvas() {
         } else if (dragState.target.type === "wall") {
           const t = dragState.target;
           const w = t.wallSnapshot;
-          const dx = w.end.x - w.start.x;
-          const dy = w.end.y - w.start.y;
-          const len = Math.hypot(dx, dy) || 1;
-          const nx = -dy / len;
-          const ny = dx / len;
-          const offset =
-            (snapped.x - t.mouseStart.x) * nx + (snapped.y - t.mouseStart.y) * ny;
-          const moved = moveWallParallel(w, offset);
+          const moved = parallelWallAt(w, t.mouseStart, snapped);
           updateWall(activeFloor.id, w.id, { start: moved.start, end: moved.end });
           setDragState((prev) => prev ? { ...prev, currentPos: snapped } : null);
         }
@@ -963,13 +1038,18 @@ export default function FloorPlanCanvas() {
         draw();
       }
     },
-    [extPositions, toPlan, draw, drawTool, drawState, dragState, activeFloor, allWalls, getTransform, moveVertex, allPositions]
+    [extPositions, toPlan, draw, drawTool, drawState, dragState, activeFloor, allWalls, getTransform, moveVertex, allPositions, pushUndo]
   );
 
   const handleMouseUp = useCallback(
     () => {
+      pendingWallDragRef.current = null;
+      // Zanim odpali się onClick: inaczej widzi stary dragState i nie otwiera panelu ściany.
+      dragStateRef.current = null;
       if (dragState) {
         setDragState(null);
+        draw();
+      } else {
         draw();
       }
     },
@@ -978,7 +1058,7 @@ export default function FloorPlanCanvas() {
 
   const handleCanvasClick = useCallback(
     (e: React.MouseEvent) => {
-      if (dragState) return;
+      if (dragStateRef.current) return;
 
       const canvas = canvasRef.current;
       if (!canvas || !activeFloor) return;
@@ -994,6 +1074,7 @@ export default function FloorPlanCanvas() {
         const stairsOnFloor = project.stairs.filter((s) => s.fromFloorId === activeFloor.id);
         const stairHit = hitTestStair(stairsOnFloor, { x: px, y: py });
         if (stairHit) {
+          wallClickArmRef.current = null;
           useStore.getState().selectStair(stairHit.id);
           selectWall(null);
           return;
@@ -1007,7 +1088,8 @@ export default function FloorPlanCanvas() {
             ? intWalls[intIdx].id
             : null;
 
-        if (hitWallId && e.altKey) {
+        if (hitWallId && wantsWallSplitModifier(e)) {
+          wallClickArmRef.current = null;
           const hitWall = activeFloor.walls.find((w) => w.id === hitWallId);
           if (hitWall) {
             const proj = projectPointOntoSegment({ x: px, y: py }, hitWall.start, hitWall.end);
@@ -1016,8 +1098,25 @@ export default function FloorPlanCanvas() {
           }
         }
 
-        if (extIdx >= 0) { selectWall(extWalls[extIdx].id); useStore.getState().selectStair(null); return; }
-        if (intIdx >= 0) { selectWall(intWalls[intIdx].id); useStore.getState().selectStair(null); return; }
+        if (extIdx >= 0) {
+          wallClickArmRef.current = null;
+          selectWall(extWalls[extIdx].id);
+          useStore.getState().selectStair(null);
+          return;
+        }
+        if (intIdx >= 0) {
+          wallClickArmRef.current = null;
+          selectWall(intWalls[intIdx].id);
+          useStore.getState().selectStair(null);
+          return;
+        }
+        // Klik bez trafienia w segment — często po mousedown na ścianie i mouseup tuż obok linii;
+        // wtedy nie czyść zaznaczenia ustawionego na mousedown.
+        if (wallClickArmRef.current) {
+          wallClickArmRef.current = null;
+          useStore.getState().selectStair(null);
+          return;
+        }
         selectWall(null);
         useStore.getState().selectStair(null);
         return;
@@ -1138,6 +1237,9 @@ export default function FloorPlanCanvas() {
     hoveredRef.current = -1;
     hoveredVertexRef.current = null;
     hoveredMidWallIdxRef.current = null;
+    pendingWallDragRef.current = null;
+    wallClickArmRef.current = null;
+    dragStateRef.current = null;
     if (dragState) {
       setDragState(null);
     }
@@ -1147,9 +1249,17 @@ export default function FloorPlanCanvas() {
   // Esc — dispatched from app/configurator (vectrig:escape) so one place handles cancel + dialogs
   useEffect(() => {
     const handler = () => {
+      if (pendingWallDragRef.current) {
+        pendingWallDragRef.current = null;
+        wallClickArmRef.current = null;
+        dragStateRef.current = null;
+        draw();
+        return;
+      }
       if (dragStateRef.current) {
         useStore.getState().undo();
         setDragState(null);
+        dragStateRef.current = null;
         return;
       }
       const ds = drawStateRef.current;
@@ -1165,7 +1275,7 @@ export default function FloorPlanCanvas() {
     };
     window.addEventListener("vectrig:escape", handler);
     return () => window.removeEventListener("vectrig:escape", handler);
-  }, [setDrawTool]);
+  }, [setDrawTool, draw]);
 
   const hintText = useMemo(() => {
     if (dragState) {
@@ -1173,7 +1283,8 @@ export default function FloorPlanCanvas() {
       if (dragState.target.type === "edge-resize") return "Zmiana długości ściany (środek) · Esc = cofnij";
       return "Przesuń ścianę równolegle · Esc = cofnij";
     }
-    if (drawTool !== "draw") return "Alt+klik na ścianie = podziel w tym miejscu";
+    if (drawTool !== "draw")
+      return "Klik = wybór · przeciągnij = przesuń równolegle · ⌥/⌘/Ctrl+klik = podział w miejscu";
     const cat =
       drawWallCategory === "external"
         ? "ściana zewnętrzna (obrys)"

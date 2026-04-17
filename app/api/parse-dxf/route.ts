@@ -1,17 +1,46 @@
 // app/api/parse-dxf/route.ts
-// POST /api/parse-dxf  body: { dxf: string }  -> UnderlayData
+// POST: multipart/form-data z polem "file" (UI import) albo JSON { dxf: string } → UnderlayData
 import { NextResponse } from "next/server";
 import { parseDxfText } from "@/lib/dxf-parser-wrapper";
 
 export async function POST(req: Request) {
   try {
-    const { dxf } = (await req.json()) as { dxf: string };
-    if (typeof dxf !== "string") {
-      return NextResponse.json({ error: "Missing dxf field" }, { status: 400 });
+    const ct = req.headers.get("content-type") ?? "";
+
+    let dxfText: string;
+
+    if (ct.includes("multipart/form-data")) {
+      const form = await req.formData();
+      const file = form.get("file");
+      if (file == null || typeof file === "string") {
+        return NextResponse.json(
+          { error: "Oczekiwano pliku .dxf w polu „file”" },
+          { status: 400 },
+        );
+      }
+      dxfText = await (file as File).text();
+    } else {
+      const body = (await req.json()) as { dxf?: string };
+      if (typeof body.dxf !== "string") {
+        return NextResponse.json(
+          { error: "Brak pola dxf w JSON lub użyj multipart z polem file" },
+          { status: 400 },
+        );
+      }
+      dxfText = body.dxf;
     }
-    const data = parseDxfText(dxf);
+
+    if (!dxfText.trim()) {
+      return NextResponse.json({ error: "Plik DXF jest pusty" }, { status: 400 });
+    }
+
+    const data = parseDxfText(dxfText);
     return NextResponse.json(data);
   } catch (e) {
-    return NextResponse.json({ error: String(e) }, { status: 500 });
+    const msg = e instanceof Error ? e.message : String(e);
+    return NextResponse.json(
+      { error: msg || "Nie udało się sparsować DXF" },
+      { status: 500 },
+    );
   }
 }

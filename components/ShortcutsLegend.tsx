@@ -35,6 +35,7 @@ const SHORTCUT_GROUPS: ShortcutGroup[] = [
   {
     label: "Edycja",
     shortcuts: [
+      { key: "⌥/⌘/Ctrl+klik", description: "Podziel ścianę w miejscu kursora (na Macu: Option lub Command)" },
       { key: "Delete", description: "Usuń wybraną ścianę" },
       { key: "Ctrl+Z", description: "Cofnij" },
       { key: "Ctrl+Shift+Z", description: "Ponów" },

@@ -15,9 +15,73 @@ export interface UnderlayEntity {
   endAngle?: number;
 }
 
+export interface BoundsRect {
+  minX: number;
+  minY: number;
+  maxX: number;
+  maxY: number;
+}
+
+/** Warstwy z elewacji / zestawienia (dxf-writer) — wyłączone z prostokąta „rzutu”, żeby podgląd nie był ściśnięty. */
+export function layerExcludedFromPlanBounds(layer: string): boolean {
+  const L = layer.toLowerCase();
+  if (L.includes("_elew_")) return true;
+  if (L.startsWith("zestawienie")) return true;
+  return false;
+}
+
+function expandBoundsWithPoint(
+  b: BoundsRect,
+  x: number,
+  y: number,
+): void {
+  if (x < b.minX) b.minX = x;
+  if (y < b.minY) b.minY = y;
+  if (x > b.maxX) b.maxX = x;
+  if (y > b.maxY) b.maxY = y;
+}
+
+function boundsFromEntity(e: UnderlayEntity, into: BoundsRect): void {
+  for (const p of e.points) {
+    expandBoundsWithPoint(into, p.x, p.y);
+  }
+  if (e.type === "circle" && e.center && typeof e.radius === "number") {
+    const r = e.radius;
+    expandBoundsWithPoint(into, e.center.x - r, e.center.y - r);
+    expandBoundsWithPoint(into, e.center.x + r, e.center.y + r);
+  }
+  if (e.type === "arc" && e.center && typeof e.radius === "number") {
+    const r = e.radius;
+    expandBoundsWithPoint(into, e.center.x - r, e.center.y - r);
+    expandBoundsWithPoint(into, e.center.x + r, e.center.y + r);
+  }
+}
+
+function computePlanBounds(
+  entities: UnderlayEntity[],
+  fallback: BoundsRect,
+): BoundsRect {
+  const b: BoundsRect = {
+    minX: Infinity,
+    minY: Infinity,
+    maxX: -Infinity,
+    maxY: -Infinity,
+  };
+  for (const e of entities) {
+    if (layerExcludedFromPlanBounds(e.layer)) continue;
+    boundsFromEntity(e, b);
+  }
+  if (!Number.isFinite(b.minX) || b.maxX <= b.minX || b.maxY <= b.minY) {
+    return { ...fallback };
+  }
+  return b;
+}
+
 export interface UnderlayData {
   entities: UnderlayEntity[];
-  bounds: { minX: number; minY: number; maxX: number; maxY: number };
+  bounds: BoundsRect;
+  /** Granica tylko rzutów (bez elewacji i tabeli) — do skalowania podglądu własnego DXF. */
+  planBounds: BoundsRect;
   layers: string[];
 }
 
@@ -29,9 +93,17 @@ export function parseDxfText(dxfText: string): UnderlayData {
     tables?: { layer?: { layers?: Record<string, unknown> } };
   };
 
+  const emptyBounds = (): BoundsRect => ({
+    minX: Infinity,
+    minY: Infinity,
+    maxX: -Infinity,
+    maxY: -Infinity,
+  });
+
   const out: UnderlayData = {
     entities: [],
-    bounds: { minX: Infinity, minY: Infinity, maxX: -Infinity, maxY: -Infinity },
+    bounds: emptyBounds(),
+    planBounds: emptyBounds(),
     layers: [],
   };
 
@@ -95,6 +167,8 @@ export function parseDxfText(dxfText: string): UnderlayData {
       }
     }
   }
+
+  out.planBounds = computePlanBounds(out.entities, out.bounds);
 
   return out;
 }

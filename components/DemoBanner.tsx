@@ -29,17 +29,25 @@ export default function DemoBanner() {
 
   return (
     <div className="bg-amber-500/10 border-b border-amber-500/40 text-amber-200 text-xs px-4 py-1.5 flex items-center gap-3">
-      <span className="text-amber-400">⚠</span>
+      <span className="text-gray-900">⚠</span>
       <span className="flex-1">
-        <strong className="text-amber-100">To jest wersja demonstracyjna.</strong>{" "}
-        Projekt żyje w przeglądarce i nie jest zapisywany na serwerze — aby zachować pracę,
-        wyeksportuj DXF. Ceny edytowane w cenniku wracają do wartości domyślnych po
-        odświeżeniu strony.
+        <strong className="text-gray-900">
+          Wersja demonstracyjna — przygotowana na podstawie naszej wiedzy
+          merytorycznej.
+        </strong>
+        <span className="text-gray-700">
+          Pełny produkt Vectrig jest znacznie szerzej funkcjonalny; w tym demo
+          akcent na <em>rysowanie modelu i generowanie DXF</em> w naszej
+          nomenklaturze — import obcych plików to szerszy temat w produkcie.
+          Projekt w przeglądarce nie jest zapisywany na serwerze — aby zachować
+          pracę, wyeksportuj DXF. Ceny z cennika wracają do wartości domyślnych
+          po odświeżeniu strony.
+        </span>
       </span>
       <button
         type="button"
         onClick={dismiss}
-        className="text-amber-300 hover:text-amber-100 leading-none text-lg"
+        className="text-gray-500 hover:text-gray-900 leading-none text-lg"
         title="Schowaj na tę sesję"
       >
         ×

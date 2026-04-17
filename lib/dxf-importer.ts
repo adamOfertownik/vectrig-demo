@@ -20,14 +20,35 @@ export interface ImportCandidate {
   lengthMM: number;
 }
 
-const WALL_KEYWORDS = ["wall", "sciana", "ściana", "mur", "wand"];
+const WALL_KEYWORDS = ["wall", "sciana", "ściana", "sciany", "mur", "wand"];
 const EXT_KEYWORDS = ["ext", "zewn", "outer", "aussen"];
 const INT_KEYWORDS = ["int", "wewn", "inner", "innen"];
-const WINDOW_KEYWORDS = ["window", "okno", "fenster", "glazing"];
+const WINDOW_KEYWORDS = ["window", "okno", "okna", "fenster", "glazing"];
 const DOOR_KEYWORDS = ["door", "drzwi", "tür", "tur"];
 const SLAB_KEYWORDS = ["slab", "strop", "floor", "decke"];
 const ROOF_KEYWORDS = ["roof", "dach"];
 const IGNORE_KEYWORDS = ["dim", "text", "hatch", "anno", "defpoints"];
+
+/** Zgodne z warstwami z lib/dxf-writer (collectLayers + użycie). */
+function classifyVectrigExportLayer(layer: string): { type: ImportEntityType; confidence: number } | null {
+  const L = layer.toLowerCase();
+  if (L.includes("_elew_")) return { type: "ignore", confidence: 0.95 };
+  if (L.startsWith("zestawienie")) return { type: "ignore", confidence: 0.95 };
+  if (L.includes("grubosc")) return { type: "ignore", confidence: 0.95 };
+  if (L.includes("wymiary")) return { type: "ignore", confidence: 0.9 };
+  if (L.includes("etykiety")) return { type: "ignore", confidence: 0.9 };
+  if (L === "osie") return { type: "ignore", confidence: 0.85 };
+  if (L.includes("_schody")) return { type: "ignore", confidence: 0.75 };
+
+  if (L.includes("sciany_zewn")) return { type: "ext_wall", confidence: 0.95 };
+  if (L.includes("sciany_wewn")) return { type: "int_wall", confidence: 0.95 };
+  if (L.includes("_okna")) return { type: "window", confidence: 0.95 };
+  if (L.includes("_drzwi")) return { type: "door", confidence: 0.95 };
+  if (L.startsWith("strop_") || L.includes("_strop_")) return { type: "slab", confidence: 0.9 };
+  if (L.startsWith("dach_")) return { type: "roof", confidence: 0.9 };
+
+  return null;
+}
 
 function matchesKeywords(layerName: string, keywords: string[]): boolean {
   const lower = layerName.toLowerCase();
@@ -57,6 +78,9 @@ function polylineArea(points: Point[]): number {
 }
 
 function classifyByLayer(layer: string): { type: ImportEntityType; confidence: number } {
+  const vectrig = classifyVectrigExportLayer(layer);
+  if (vectrig) return vectrig;
+
   if (matchesKeywords(layer, IGNORE_KEYWORDS)) return { type: "ignore", confidence: 0.9 };
   if (matchesKeywords(layer, DOOR_KEYWORDS)) return { type: "door", confidence: 0.8 };
   if (matchesKeywords(layer, WINDOW_KEYWORDS)) return { type: "window", confidence: 0.8 };
@@ -108,7 +132,16 @@ export function analyzeForImport(
   const candidates: ImportCandidate[] = [];
 
   for (const entity of data.entities) {
-    const layerClass = classifyByLayer(entity.layer);
+    let layerClass = classifyByLayer(entity.layer);
+    // Eksport: oś ściany wewn. to LINE, obrys grubości to POLYLINE — ta sama warstwa *_SCIANY_WEWN.
+    if (
+      layerClass.type === "int_wall"
+      && entity.type === "polyline"
+      && entity.layer.toLowerCase().includes("sciany_wewn")
+    ) {
+      layerClass = { type: "ignore", confidence: 0.95 };
+    }
+
     const geoClass = classifyByGeometry(entity, scaleFactor);
 
     const best = layerClass.confidence >= geoClass.confidence ? layerClass : geoClass;
@@ -189,10 +222,22 @@ export function candidatesToWalls(
   return walls;
 }
 
+function boundsMaxDimension(b: { minX: number; minY: number; maxX: number; maxY: number }): number {
+  const w = b.maxX - b.minX;
+  const h = b.maxY - b.minY;
+  return Math.max(w, h);
+}
+
 export function guessScale(data: UnderlayData): number {
-  const w = data.bounds.maxX - data.bounds.minX;
-  const h = data.bounds.maxY - data.bounds.minY;
-  const maxDim = Math.max(w, h);
+  const pb = data.planBounds;
+  const planOk =
+    pb &&
+    Number.isFinite(pb.minX) &&
+    pb.maxX > pb.minX &&
+    pb.maxY > pb.minY;
+  const plan = planOk ? boundsMaxDimension(pb) : NaN;
+  const full = boundsMaxDimension(data.bounds);
+  const maxDim = Number.isFinite(plan) && plan > 1 ? plan : full;
 
   if (maxDim < 1) return 1000;
   if (maxDim < 100) return 1000;

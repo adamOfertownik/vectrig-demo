@@ -82,9 +82,21 @@ export default function DxfImportDialog() {
         body: formData,
       });
 
-      if (!resp.ok) throw new Error(`Parse error: ${resp.statusText}`);
+      const payload = await resp.json().catch(() => null);
 
-      const data: UnderlayData = await resp.json();
+      if (!resp.ok) {
+        const serverMsg =
+          payload && typeof payload === "object" && "error" in payload
+            ? String((payload as { error: unknown }).error)
+            : "";
+        throw new Error(
+          serverMsg ||
+            resp.statusText ||
+            `Błąd serwera (${resp.status}) przy parsowaniu DXF`,
+        );
+      }
+
+      const data = payload as UnderlayData;
       setUnderlayData(data);
 
       const guessed = guessScale(data);
@@ -187,7 +199,7 @@ export default function DxfImportDialog() {
     ctx.fillStyle = "#1a1d23";
     ctx.fillRect(0, 0, cw, ch);
 
-    const b = underlayData.bounds;
+    const b = underlayData.planBounds;
     const bw = (b.maxX - b.minX) * scaleFactor || 1;
     const bh = (b.maxY - b.minY) * scaleFactor || 1;
     const pad = 20;
@@ -224,11 +236,20 @@ export default function DxfImportDialog() {
     <div className="fixed inset-0 z-50 flex items-center justify-center bg-black/50 backdrop-blur-sm">
       <div className="bg-panel border border-border rounded-xl shadow-2xl w-[900px] max-h-[85vh] flex flex-col">
         {/* Header */}
-        <div className="flex items-center justify-between px-6 py-4 border-b border-border">
-          <h2 className="text-lg font-semibold">Import DXF</h2>
+        <div className="flex items-start justify-between gap-4 px-6 py-4 border-b border-border">
+          <div className="min-w-0 flex-1">
+            <h2 className="text-lg font-semibold">Import DXF</h2>
+            <p className="text-xs text-muted mt-1">
+              Pełny import produkcyjny obejmuje wiele scenariuszy i źródeł — nad tym pracujemy.
+              Przy pracy w <span className="text-foreground/90">tej samej nomenklaturze</span>{" "}
+              najpewniejszy obieg to plik <span className="text-foreground/90">wygenerowany</span>{" "}
+              z konfiguratora; obce DXF wymagają mapowania warstw poniżej.
+            </p>
+          </div>
           <button
+            type="button"
             onClick={() => setShowDxfImport(false)}
-            className="text-muted hover:text-foreground text-xl leading-none"
+            className="text-muted hover:text-foreground text-xl leading-none shrink-0 pt-0.5"
           >
             ×
           </button>
