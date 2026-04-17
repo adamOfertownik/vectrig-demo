@@ -12,8 +12,8 @@ interface TourStep {
 const STEPS: TourStep[] = [
   {
     targetSelector: "[data-tour='shapes']",
-    title: "1. Wybierz kształt budynku",
-    body: "Kliknij gotowy kształt (prostokąt, L) lub użyj narzędzia ołówka, żeby narysować ściany ręcznie. W trybie rysowania możesz klikać w istniejące ściany by je łamać.",
+    title: "1. Wgraj gotowy schemat lub narysuj obrys",
+    body: "Tutaj wgrasz gotowy schemat obrysu — szablony domów z gotowym układem ścian zewnętrznych (klawisze 1–3). Możesz też użyć ołówka i narysować plan od zera; w trybie rysowania klikaj w ściany, by je dzielić.",
     position: "bottom",
   },
   {

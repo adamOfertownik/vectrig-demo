@@ -94,10 +94,11 @@ export default function WelcomeModal() {
   if (!visible) return null;
 
   return (
-    <div className="fixed inset-0 z-[10000] bg-black/60 flex items-center justify-center p-4 overflow-y-auto">
-      <div className="bg-panel border border-border rounded-2xl shadow-2xl max-w-xl w-full my-8">
+    <div className="fixed inset-0 z-[10000] overflow-y-auto bg-black/60">
+      <div className="flex min-h-full items-center justify-center p-4 py-8 sm:p-6 sm:py-10">
+        <div className="bg-panel border border-border rounded-2xl shadow-2xl max-w-4xl w-full max-h-[min(92vh,880px)] flex flex-col">
         {/* Header */}
-        <div className="p-6 border-b border-border">
+        <div className="p-6 border-b border-border flex-shrink-0">
           <div className="flex items-baseline gap-3">
             <div className="text-2xl font-bold tracking-tight">Vectrig</div>
             <div className="text-xs uppercase tracking-widest text-accent">
@@ -115,14 +116,17 @@ export default function WelcomeModal() {
           </p>
         </div>
 
+        <div className="flex-1 min-h-0 overflow-y-auto overscroll-contain scrollbar-thin">
         {/* Demo note */}
         <div className="p-5 border-b border-border bg-amber-500/5">
           <div className="flex gap-3">
-            <div className="text-amber-400 text-lg leading-none">⚠</div>
-            <div className="text-xs text-amber-100/90 leading-relaxed space-y-2">
+            <div className="text-amber-600 dark:text-amber-400 text-lg leading-none shrink-0" aria-hidden>
+              ⚠
+            </div>
+            <div className="text-xs leading-relaxed space-y-2 text-amber-950 dark:text-amber-50">
               <p>
-                <strong className="text-amber-200">To nie jest pełny produkt</strong> — jest to{" "}
-                <strong>wersja pokazowa opracowana na podstawie naszej wiedzy</strong> i
+                <strong className="text-amber-900 dark:text-amber-200">To nie jest pełny produkt</strong> — jest to{" "}
+                <strong className="text-amber-900 dark:text-amber-200">wersja pokazowa opracowana na podstawie naszej wiedzy</strong> i
                 doświadczenia projektowego. Docelowa, produkcyjna wersja Vectrig jest{" "}
                 <em>znacznie bardziej rozbudowana</em> i obejmuje wiele funkcji wykraczających
                 poza ten pokaz.
@@ -165,7 +169,7 @@ export default function WelcomeModal() {
           <div className="text-xs font-medium text-muted mb-2">Jak zacząć</div>
           <ol className="text-sm space-y-1.5 list-decimal list-inside">
             <li>
-              Wybierz gotowy kształt (Prostokąt / L) lub narysuj ściany ołówkiem.
+              Wybierz szablon domu (np. w stylu ARCHON+) lub narysuj ściany ołówkiem.
             </li>
             <li>
               Kliknij w ścianę, aby dodać okna i drzwi — możesz też łamać ścianę
@@ -177,9 +181,10 @@ export default function WelcomeModal() {
             </li>
           </ol>
         </div>
+        </div>
 
         {/* Actions */}
-        <div className="p-5 flex items-center gap-2 justify-end">
+        <div className="p-5 flex items-center gap-2 justify-end flex-shrink-0 border-t border-border bg-panel rounded-b-2xl">
           <button
             type="button"
             className="btn btn-sm"
@@ -194,6 +199,7 @@ export default function WelcomeModal() {
           >
             Pokaż mi jak →
           </button>
+        </div>
         </div>
       </div>
     </div>

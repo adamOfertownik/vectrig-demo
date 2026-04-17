@@ -5,7 +5,7 @@ import { create } from "zustand";
 import type {
   Building,
   Project, Floor, Wall, Opening, Roof, RoofAnomaly,
-  WallType, WallCategory, ViewMode, ProjectDefaults, RoofType, GableWall, Point,
+  WallCategory, ViewMode, ProjectDefaults, RoofType, GableWall, Point,
   SlabCutout, Stair,
 } from "./types";
 import { computeClosingWall, moveSharedVertex, splitWallAt, orderExternalPolygonVertices, stairFootprint } from "./geometry";
@@ -25,6 +25,7 @@ import {
   findBuildingIdForFloor,
   duplicateBuildingStructure,
 } from "./project-migrate";
+import { getHouseTemplate, type HouseTemplateId } from "./house-templates";
 
 function computeStairFootprintLocal(stair: Stair): Point[] {
   return stairFootprint(stair);
@@ -132,7 +133,7 @@ interface ConfiguratorState {
   splitWall: (floorId: string, wallId: string, at: Point) => Point | null;
   closeOutline: (floorId: string) => void;
   setFloorWalls: (floorId: string, walls: Omit<Wall, "id">[]) => void;
-  applyPreset: (floorId: string, preset: "rect" | "lshape" | "lshape_mezzanine") => void;
+  applyHouseTemplate: (floorId: string, templateId: HouseTemplateId) => void;
   moveVertex: (floorId: string, targetPoint: Point, newPoint: Point) => void;
   importDxfWalls: (floorId: string, walls: Omit<Wall, "id">[]) => void;
 
@@ -179,47 +180,6 @@ interface ConfiguratorState {
   redo: () => void;
 
   toggleTheme: () => void;
-}
-
-// ---------------------------------------------------------------------------
-// Preset builders (vertex-based)
-// ---------------------------------------------------------------------------
-
-function rectWalls(ext: WallType, h: number, w = 10000, d = 8000): Omit<Wall, "id">[] {
-  return [
-    { type: ext, category: "external", label: "Front", start: { x: 0, y: 0 }, end: { x: w, y: 0 }, height: h, openings: [] },
-    { type: ext, category: "external", label: "Lewa", start: { x: w, y: 0 }, end: { x: w, y: d }, height: h, openings: [] },
-    { type: ext, category: "external", label: "Tylna", start: { x: w, y: d }, end: { x: 0, y: d }, height: h, openings: [] },
-    { type: ext, category: "external", label: "Prawa", start: { x: 0, y: d }, end: { x: 0, y: 0 }, height: h, openings: [] },
-  ];
-}
-
-function lshapeWalls(ext: WallType, h: number): Omit<Wall, "id">[] {
-  const pts: Point[] = [
-    { x: 0, y: 0 }, { x: 10000, y: 0 }, { x: 10000, y: 4000 },
-    { x: 5000, y: 4000 }, { x: 5000, y: 8000 }, { x: 0, y: 8000 },
-  ];
-  return pts.map((p, i) => ({
-    type: ext, category: "external" as const,
-    label: `Ściana ${i + 1}`,
-    start: p,
-    end: pts[(i + 1) % pts.length],
-    height: h, openings: [],
-  }));
-}
-
-function lshapeMezzanineWalls(ext: WallType, h: number): Omit<Wall, "id">[] {
-  const pts: Point[] = [
-    { x: 0, y: 0 }, { x: 12000, y: 0 }, { x: 12000, y: 4000 },
-    { x: 8000, y: 4000 }, { x: 8000, y: 8000 }, { x: 0, y: 8000 },
-  ];
-  return pts.map((p, i) => ({
-    type: ext, category: "external" as const,
-    label: `Ściana ${i + 1}`,
-    start: p,
-    end: pts[(i + 1) % pts.length],
-    height: h, openings: [],
-  }));
 }
 
 // ---------------------------------------------------------------------------
@@ -584,7 +544,7 @@ export const useStore = create<ConfiguratorState>((set, get) => ({
     selectedWallId: null,
   })),
 
-  applyPreset: (floorId, preset) => set((s) => {
+  applyHouseTemplate: (floorId, templateId) => set((s) => {
     get().pushUndo();
     const bid = findBuildingIdForFloor(s.project, floorId);
     if (!bid) return s;
@@ -593,10 +553,7 @@ export const useStore = create<ConfiguratorState>((set, get) => ({
     if (!floor) return s;
     const h = floor.height;
     const ext = s.project.defaults.extWallType;
-
-    const walls = preset === "rect" ? rectWalls(ext, h)
-      : preset === "lshape" ? lshapeWalls(ext, h)
-      : lshapeMezzanineWalls(ext, h);
+    const walls = getHouseTemplate(templateId).build(ext, h);
 
     return {
       project: updateFloorInProject(s.project, floorId, (f) => ({

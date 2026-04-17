@@ -3,6 +3,7 @@
 import { useStore, useActiveFloor, useActiveBuilding } from "@/lib/store";
 import { getWallsByCategory } from "@/lib/catalog";
 import type { WallCategory } from "@/lib/types";
+import { HOUSE_TEMPLATES } from "@/lib/house-templates";
 
 export default function FloorToolbar() {
   const project = useStore((s) => s.project);
@@ -21,7 +22,7 @@ export default function FloorToolbar() {
   const setDrawTool = useStore((s) => s.setDrawTool);
   const drawWallCategory = useStore((s) => s.drawWallCategory);
   const setDrawWallCategory = useStore((s) => s.setDrawWallCategory);
-  const applyPreset = useStore((s) => s.applyPreset);
+  const applyHouseTemplate = useStore((s) => s.applyHouseTemplate);
   const setShowDxfImport = useStore((s) => s.setShowDxfImport);
   const setShowShortcuts = useStore((s) => s.setShowShortcuts);
   const slabEdit = useStore((s) => s.slabEdit);
@@ -227,29 +228,19 @@ export default function FloorToolbar() {
 
           <div className="w-px h-5 bg-border mx-0.5" />
 
-          <div className="flex items-center gap-0.5" data-tour="shapes">
-            <span className="text-[10px] text-muted mr-0.5">Kształt:</span>
-            <button
-              className="btn btn-sm"
-              onClick={() => floor && applyPreset(floor.id, "rect")}
-              title="Prostokąt 10×8m (1)"
-            >
-              <span className="text-xs">▭</span> Prostokąt
-            </button>
-            <button
-              className="btn btn-sm"
-              onClick={() => floor && applyPreset(floor.id, "lshape")}
-              title="L-kształt (2)"
-            >
-              <span className="text-xs">⌐</span> L-kształt
-            </button>
-            <button
-              className="btn btn-sm"
-              onClick={() => floor && applyPreset(floor.id, "lshape_mezzanine")}
-              title="L z antresolą (3)"
-            >
-              <span className="text-xs">⌐</span> L + antresola
-            </button>
+          <div className="flex items-center gap-0.5 flex-wrap" data-tour="shapes">
+            <span className="text-[10px] text-muted mr-0.5 shrink-0">Szablony:</span>
+            {HOUSE_TEMPLATES.map((t, i) => (
+              <button
+                key={t.id}
+                type="button"
+                className="btn btn-sm max-w-[10rem]"
+                onClick={() => floor && applyHouseTemplate(floor.id, t.id)}
+                title={`${t.name} — ${t.hint} (klawisz ${i + 1})`}
+              >
+                <span className="text-[10px] leading-tight block truncate text-left">{t.name}</span>
+              </button>
+            ))}
           </div>
 
           <div className="w-px h-5 bg-border mx-0.5" />

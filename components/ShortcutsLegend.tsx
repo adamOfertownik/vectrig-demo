@@ -1,6 +1,7 @@
 "use client";
 
 import { useStore } from "@/lib/store";
+import { HOUSE_TEMPLATES } from "@/lib/house-templates";
 
 interface ShortcutEntry {
   key: string;
@@ -42,12 +43,11 @@ const SHORTCUT_GROUPS: ShortcutGroup[] = [
     ],
   },
   {
-    label: "Kształty",
-    shortcuts: [
-      { key: "1", description: "Prostokąt" },
-      { key: "2", description: "L-kształt" },
-      { key: "3", description: "L + antresola" },
-    ],
+    label: "Szablony",
+    shortcuts: HOUSE_TEMPLATES.map((t, i) => ({
+      key: String(i + 1),
+      description: t.name,
+    })),
   },
   {
     label: "Import / Export",

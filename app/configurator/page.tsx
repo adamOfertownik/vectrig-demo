@@ -4,6 +4,7 @@ import { useEffect } from "react";
 import dynamic from "next/dynamic";
 import Link from "next/link";
 import { useStore, useActiveFloor } from "@/lib/store";
+import { HOUSE_TEMPLATES } from "@/lib/house-templates";
 import FloorToolbar from "@/components/FloorToolbar";
 import FloorPlanCanvas from "@/components/FloorPlanCanvas";
 import WallConfigPanel from "@/components/WallConfigPanel";
@@ -101,13 +102,13 @@ export default function ConfiguratorPage() {
           }
           break;
         case "1":
-          if (floor) state.applyPreset(floor.id, "rect");
+          if (floor) state.applyHouseTemplate(floor.id, HOUSE_TEMPLATES[0].id);
           break;
         case "2":
-          if (floor) state.applyPreset(floor.id, "lshape");
+          if (floor) state.applyHouseTemplate(floor.id, HOUSE_TEMPLATES[1].id);
           break;
         case "3":
-          if (floor) state.applyPreset(floor.id, "lshape_mezzanine");
+          if (floor) state.applyHouseTemplate(floor.id, HOUSE_TEMPLATES[2].id);
           break;
         case "Delete":
         case "Backspace":
