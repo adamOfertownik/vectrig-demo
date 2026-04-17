@@ -28,10 +28,10 @@ export default function DemoBanner() {
   }
 
   return (
-    <div className="bg-amber-500/10 border-b border-amber-500/40 text-amber-200 text-xs px-4 py-1.5 flex items-center gap-3">
-      <span className="text-gray-900">⚠</span>
+    <div className="bg-amber-500/10 border-b border-amber-500/40 text-gray-900 text-xs px-4 py-1.5 flex items-center gap-3">
+      <span>⚠</span>
       <span className="flex-1">
-        <strong className="text-gray-900">
+        <strong>
           Wersja demonstracyjna — przygotowana na podstawie naszej wiedzy
           merytorycznej.
         </strong>
