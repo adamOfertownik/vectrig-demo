@@ -3,6 +3,8 @@
 import { NextResponse } from "next/server";
 import { parseDxfText } from "@/lib/dxf-parser-wrapper";
 
+export const runtime = "nodejs";
+
 export async function POST(req: Request) {
   try {
     const ct = req.headers.get("content-type") ?? "";

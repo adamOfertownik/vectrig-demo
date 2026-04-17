@@ -24,6 +24,42 @@ import * as THREE from "three";
 const MM_TO_M = 0.001;
 const WALL_OPACITY = 0.85;
 
+/** Plansza podłoża w 3D: obejmuje wszystkie budynki (parter + pozycja na działce), z marginesem. */
+function computeSiteGroundPlane(project: Project): { cx: number; cz: number; w: number; d: number } {
+  const PAD_MM = 4000;
+  let minX = Infinity;
+  let minZ = Infinity;
+  let maxX = -Infinity;
+  let maxZ = -Infinity;
+
+  for (const b of project.buildings) {
+    const floor = b.floors.find((f) => f.level === 0) ?? b.floors[0];
+    if (!floor) continue;
+    const ext = floor.walls.filter((w) => w.category === "external");
+    const pos = computeFloorPlanPositions(ext);
+    const bb = computeBounds(pos.length ? pos : []);
+    const ox = b.position.x;
+    const oy = b.position.y;
+    minX = Math.min(minX, bb.minX + ox);
+    maxX = Math.max(maxX, bb.maxX + ox);
+    minZ = Math.min(minZ, bb.minY + oy);
+    maxZ = Math.max(maxZ, bb.maxY + oy);
+  }
+
+  if (project.buildings.length === 0 || !Number.isFinite(minX)) {
+    return { cx: 0, cz: 0, w: 40, d: 40 };
+  }
+
+  const spanX = maxX - minX;
+  const spanZ = maxZ - minZ;
+  const pad = Math.max(PAD_MM, spanX * 0.08, spanZ * 0.08);
+  const w = (spanX + 2 * pad) * MM_TO_M;
+  const d = (spanZ + 2 * pad) * MM_TO_M;
+  const cx = ((minX + maxX) / 2) * MM_TO_M;
+  const cz = ((minZ + maxZ) / 2) * MM_TO_M;
+  return { cx, cz, w, d };
+}
+
 export default function Preview3D() {
   const project = useStore((s) => s.project);
   const theme = useStore((s) => s.theme);
@@ -53,7 +89,7 @@ export default function Preview3D() {
           {project.buildings.map((b) => (
             <BuildingModel key={b.id} building={b} project={project} />
           ))}
-          <Ground theme={theme} />
+          <Ground theme={theme} project={project} />
         </Suspense>
       </Canvas>
       <LayerTogglesOverlay />
@@ -128,10 +164,11 @@ function LayerTogglesOverlay() {
   );
 }
 
-function Ground({ theme }: { theme: string }) {
+function Ground({ theme, project }: { theme: string; project: Project }) {
+  const { cx, cz, w, d } = useMemo(() => computeSiteGroundPlane(project), [project]);
   return (
-    <mesh rotation={[-Math.PI / 2, 0, 0]} position={[0, -0.01, 0]} receiveShadow>
-      <planeGeometry args={[40, 40]} />
+    <mesh rotation={[-Math.PI / 2, 0, 0]} position={[cx, -0.01, cz]} receiveShadow>
+      <planeGeometry args={[w, d]} />
       <meshStandardMaterial
         color={theme === "dark" ? "#1a1d23" : "#e8ebe5"}
         roughness={1}

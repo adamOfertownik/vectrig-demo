@@ -184,27 +184,39 @@ export default function ConfiguratorPage() {
         {/* Central content area */}
         <div className="flex-1 flex flex-col min-w-0">
           {viewMode === "floorplan" && (
-            <div className="flex-1 flex min-h-0">
-              {/* 2D Canvas / 3D Preview */}
-              <div className="flex-1 min-w-0" data-tour="canvas">
-                {show3D ? <Preview3D /> : <FloorPlanCanvas />}
+            <>
+              <div className="px-3 py-1.5 border-b border-border bg-panel/90 text-[11px] text-muted shrink-0 flex items-center gap-1.5 flex-wrap">
+                <span>
+                  Przełączaj się między widokiem <span className="text-foreground font-medium">2D</span> a{" "}
+                  <span className="text-foreground font-medium">3D</span> klawiszem{" "}
+                  <kbd className="inline-flex items-center px-1.5 py-0.5 rounded bg-surface border border-border text-[10px] font-mono text-foreground">
+                    F
+                  </kbd>
+                  . Ściany rysuj w widoku 2D.
+                </span>
               </div>
+              <div className="flex-1 flex min-h-0">
+                {/* 2D Canvas / 3D Preview */}
+                <div className="flex-1 min-w-0" data-tour="canvas">
+                  {show3D ? <Preview3D /> : <FloorPlanCanvas />}
+                </div>
 
-              {/* Right panel: wall config / stair / slab */}
-              {selectedStairId ? (
-                <div className="w-72 lg:w-80 border-l border-border bg-panel flex-shrink-0">
-                  <StairPanel />
-                </div>
-              ) : selectedWallId ? (
-                <div className="w-72 lg:w-80 border-l border-border bg-panel flex-shrink-0">
-                  <WallConfigPanel />
-                </div>
-              ) : slabEdit ? (
-                <div className="w-72 lg:w-80 border-l border-border bg-panel flex-shrink-0">
-                  <SlabPanel />
-                </div>
-              ) : null}
-            </div>
+                {/* Right panel: wall config / stair / slab */}
+                {selectedStairId ? (
+                  <div className="w-72 lg:w-80 border-l border-border bg-panel flex-shrink-0">
+                    <StairPanel />
+                  </div>
+                ) : selectedWallId ? (
+                  <div className="w-72 lg:w-80 border-l border-border bg-panel flex-shrink-0">
+                    <WallConfigPanel />
+                  </div>
+                ) : slabEdit ? (
+                  <div className="w-72 lg:w-80 border-l border-border bg-panel flex-shrink-0">
+                    <SlabPanel />
+                  </div>
+                ) : null}
+              </div>
+            </>
           )}
 
           {viewMode === "roof" && (
