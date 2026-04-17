@@ -1,6 +1,6 @@
 "use client";
 
-import { useStore } from "@/lib/store";
+import { useStore, useActiveBuilding } from "@/lib/store";
 import { getWallsByCategory } from "@/lib/catalog";
 import type { WallType } from "@/lib/types";
 
@@ -9,7 +9,8 @@ export default function SettingsPanel() {
   const setDefaults = useStore((s) => s.setDefaults);
   const projectName = useStore((s) => s.project.name);
   const setProjectName = useStore((s) => s.setProjectName);
-  const backWallEnabled = useStore((s) => s.project.backWallEnabled);
+  const activeBuilding = useActiveBuilding();
+  const backWallEnabled = activeBuilding?.backWallEnabled ?? true;
   const setBackWallEnabled = useStore((s) => s.setBackWallEnabled);
   // Re-render po zmianach w cenniku (nowe typy CLT).
   useStore((s) => s.catalogOverrides);

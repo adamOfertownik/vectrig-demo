@@ -1,11 +1,11 @@
 "use client";
 
-import { useStore, useActiveFloor } from "@/lib/store";
+import { useStore, useActiveFloor, useActiveBuilding } from "@/lib/store";
 import { polygonAreaSqm } from "@/lib/geometry";
 
 export default function SlabPanel() {
   const floor = useActiveFloor();
-  const project = useStore((s) => s.project);
+  const activeBuilding = useActiveBuilding();
   const detachSlab = useStore((s) => s.detachSlab);
   const reattachSlab = useStore((s) => s.reattachSlab);
   const removeSlabCutout = useStore((s) => s.removeSlabCutout);
@@ -86,7 +86,7 @@ export default function SlabPanel() {
           {cutouts.map((c) => {
             const area = polygonAreaSqm(c.vertices);
             const linked = c.linkedStairId
-              ? project.stairs.find((s) => s.id === c.linkedStairId)
+              ? activeBuilding?.stairs.find((s) => s.id === c.linkedStairId)
               : null;
             return (
               <div

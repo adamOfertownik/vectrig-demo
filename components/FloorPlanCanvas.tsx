@@ -1,7 +1,7 @@
 "use client";
 
 import { useRef, useEffect, useCallback, useMemo, useState } from "react";
-import { useStore, useActiveFloor } from "@/lib/store";
+import { useStore, useActiveFloor, useActiveBuilding } from "@/lib/store";
 import { getWallEntry } from "@/lib/catalog";
 import {
   computeFloorPlanPositions,
@@ -20,7 +20,7 @@ import {
   type WallPosition,
 } from "@/lib/geometry";
 import { resolveOpeningMm } from "@/lib/openings";
-import type { Point, Wall } from "@/lib/types";
+import type { Building, Floor, Point, Wall } from "@/lib/types";
 
 const PADDING = 60;
 const GRID_STEP_MM = 1000;
@@ -110,7 +110,12 @@ export default function FloorPlanCanvas() {
   const shiftHeldRef = useRef(false);
 
   const floor = useActiveFloor();
+  const activeBuilding = useActiveBuilding();
   const project = useStore((s) => s.project);
+  const sitePlanMode = useStore((s) => s.sitePlanMode);
+  const sharedFloorLevel = useStore((s) => s.sharedFloorLevel);
+  const setActiveBuilding = useStore((s) => s.setActiveBuilding);
+  const setActiveFloor = useStore((s) => s.setActiveFloor);
   const selectedWallId = useStore((s) => s.selectedWallId);
   const selectWall = useStore((s) => s.selectWall);
   const addWall = useStore((s) => s.addWall);
@@ -134,10 +139,12 @@ export default function FloorPlanCanvas() {
 
   const activeFloor = floor;
   const activeLevel = activeFloor?.level ?? 0;
+  const off = activeBuilding?.position ?? { x: 0, y: 0 };
+
   const ghostFloor = useMemo(() => {
-    if (activeLevel <= 0) return undefined;
-    return project.floors.find((f) => f.level === activeLevel - 1);
-  }, [project.floors, activeLevel]);
+    if (activeLevel <= 0 || !activeBuilding) return undefined;
+    return activeBuilding.floors.find((f) => f.level === activeLevel - 1);
+  }, [activeBuilding, activeLevel]);
 
   const allWalls = useMemo(() => activeFloor?.walls ?? [], [activeFloor]);
   const extWalls = useMemo(() => allWalls.filter((w) => w.category === "external"), [allWalls]);
@@ -164,10 +171,44 @@ export default function FloorPlanCanvas() {
     return combined;
   }, [extPositions, intPositions, ghostExtPositions]);
 
-  const bounds = useMemo(
-    () => computeBounds(allPosForBounds.length ? allPosForBounds : extPositions),
-    [allPosForBounds, extPositions]
-  );
+  /** Pozycje ścian innych budynków (plan sytuacyjny) — układ świata w mm. */
+  const otherBuildingsSiteData = useMemo(() => {
+    if (!sitePlanMode || project.buildings.length < 2) return [] as { building: Building; floor: Floor; ext: ReturnType<typeof computeFloorPlanPositions>; int: ReturnType<typeof computeFloorPlanPositions> }[];
+    const out: { building: Building; floor: Floor; ext: ReturnType<typeof computeFloorPlanPositions>; int: ReturnType<typeof computeFloorPlanPositions> }[] = [];
+    for (const b of project.buildings) {
+      if (activeBuilding && b.id === activeBuilding.id) continue;
+      const f = b.floors.find((fl) => fl.level === sharedFloorLevel);
+      if (!f || f.walls.length === 0) continue;
+      const ext = f.walls.filter((w) => w.category === "external");
+      const int = f.walls.filter((w) => w.category === "internal");
+      out.push({
+        building: b,
+        floor: f,
+        ext: computeFloorPlanPositions(ext),
+        int: computeFloorPlanPositions(int),
+      });
+    }
+    return out;
+  }, [sitePlanMode, project.buildings, activeBuilding?.id, sharedFloorLevel]);
+
+  const bounds = useMemo(() => {
+    const shift = (positions: typeof extPositions, ox: number, oy: number) =>
+      positions.map((wp) => ({
+        ...wp,
+        start: { x: wp.start.x + ox, y: wp.start.y + oy },
+        end: { x: wp.end.x + ox, y: wp.end.y + oy },
+      }));
+    let combined = [...shift(extPositions, off.x, off.y), ...shift(intPositions, off.x, off.y)];
+    if (ghostExtPositions.length) {
+      combined = [...combined, ...shift(ghostExtPositions, off.x, off.y), ...shift(ghostIntPositions, off.x, off.y)];
+    }
+    for (const ob of otherBuildingsSiteData) {
+      const ox = ob.building.position.x;
+      const oy = ob.building.position.y;
+      combined = [...combined, ...shift(ob.ext, ox, oy), ...shift(ob.int, ox, oy)];
+    }
+    return computeBounds(combined.length ? combined : shift(extPositions, off.x, off.y));
+  }, [extPositions, intPositions, ghostExtPositions, ghostIntPositions, otherBuildingsSiteData, off.x, off.y]);
 
   const allVertices = useMemo(() => {
     const verts: Point[] = [];
@@ -310,10 +351,12 @@ export default function FloorPlanCanvas() {
     const { scale } = getTransform(cw, ch);
     const gridPx = GRID_STEP_MM * scale;
 
-    const topFloorId = project.floors[project.floors.length - 1]?.id;
+    const floorsAB = activeBuilding?.floors ?? [];
+    const topFloorId = floorsAB[floorsAB.length - 1]?.id;
     const isTopFloorView = activeFloor?.id === topFloorId;
-    const groundExtForRoof = project.floors[0]?.walls.filter((w) => w.category === "external") ?? [];
+    const groundExtForRoof = floorsAB[0]?.walls.filter((w) => w.category === "external") ?? [];
     const roofBoundsForPlan = computeBoundsFromWalls(groundExtForRoof);
+    const roofForPlan = activeBuilding?.roof ?? null;
 
     // Grid
     if (gridPx > 15) {
@@ -330,15 +373,43 @@ export default function FloorPlanCanvas() {
       }
       for (let ymm = startYmm; ymm <= endYmm; ymm += GRID_STEP_MM) {
         const { cy } = toCanvas(0, ymm, cw, ch);
-        ctx.beginPath(); ctx.moveTo(0, cy); ctx.lineTo(cw, cy); ctx.stroke();
+        ctx.beginPath(); ctx.moveTo(0, cy); ctx.lineTo(cw, cy);         ctx.stroke();
+      }
+    }
+
+    // --- Inne budynki (plan sytuacyjny) — tylko podgląd ---
+    if (otherBuildingsSiteData.length > 0) {
+      const mutedExt = isDark ? "rgba(160,164,176,0.35)" : "rgba(58,61,72,0.28)";
+      const mutedInt = isDark ? "rgba(107,112,128,0.22)" : "rgba(139,146,160,0.18)";
+      for (const ob of otherBuildingsSiteData) {
+        const ox = ob.building.position.x;
+        const oy = ob.building.position.y;
+        for (const wp of ob.int) {
+          const s = toCanvas(wp.start.x + ox, wp.start.y + oy, cw, ch);
+          const e = toCanvas(wp.end.x + ox, wp.end.y + oy, cw, ch);
+          ctx.save(); ctx.setLineDash([5, 4]); ctx.strokeStyle = mutedInt; ctx.lineWidth = 1.5;
+          ctx.beginPath(); ctx.moveTo(s.cx, s.cy); ctx.lineTo(e.cx, e.cy); ctx.stroke(); ctx.restore();
+        }
+        for (const wp of ob.ext) {
+          const s = toCanvas(wp.start.x + ox, wp.start.y + oy, cw, ch);
+          const e = toCanvas(wp.end.x + ox, wp.end.y + oy, cw, ch);
+          ctx.strokeStyle = mutedExt; ctx.lineWidth = 2; ctx.setLineDash([]);
+          ctx.beginPath(); ctx.moveTo(s.cx, s.cy); ctx.lineTo(e.cx, e.cy); ctx.stroke();
+        }
+        const gb = computeBounds(ob.ext);
+        const lp = toCanvas(gb.centerX + ox, gb.maxY + 800 + oy, cw, ch);
+        ctx.fillStyle = isDark ? "rgba(148,163,184,0.7)" : "rgba(71,85,105,0.75)";
+        ctx.font = "500 10px Inter, system-ui, sans-serif";
+        ctx.textAlign = "center";
+        ctx.fillText(`${ob.building.name} · ${ob.floor.name}`, lp.cx, lp.cy);
       }
     }
 
     // --- Ghost floor ---
     if (ghostExtPositions.length > 0) {
       for (const wp of ghostExtPositions) {
-        const s = toCanvas(wp.start.x, wp.start.y, cw, ch);
-        const e = toCanvas(wp.end.x, wp.end.y, cw, ch);
+        const s = toCanvas(wp.start.x + off.x, wp.start.y + off.y, cw, ch);
+        const e = toCanvas(wp.end.x + off.x, wp.end.y + off.y, cw, ch);
         ctx.save();
         ctx.setLineDash([8, 6]);
         ctx.strokeStyle = ghostWallColor;
@@ -364,8 +435,8 @@ export default function FloorPlanCanvas() {
         ctx.restore();
       }
       for (const wp of ghostIntPositions) {
-        const s = toCanvas(wp.start.x, wp.start.y, cw, ch);
-        const e = toCanvas(wp.end.x, wp.end.y, cw, ch);
+        const s = toCanvas(wp.start.x + off.x, wp.start.y + off.y, cw, ch);
+        const e = toCanvas(wp.end.x + off.x, wp.end.y + off.y, cw, ch);
         ctx.save(); ctx.setLineDash([4, 4]);
         ctx.strokeStyle = isDark ? "rgba(107,112,128,0.15)" : "rgba(139,146,160,0.12)";
         ctx.lineWidth = 1.5;
@@ -374,7 +445,7 @@ export default function FloorPlanCanvas() {
       }
       if (ghostFloor) {
         const gb = computeBounds(ghostExtPositions);
-        const labelPos = toCanvas(gb.centerX, gb.maxY + 600, cw, ch);
+        const labelPos = toCanvas(gb.centerX + off.x, gb.maxY + 600 + off.y, cw, ch);
         ctx.fillStyle = ghostDimColor;
         ctx.font = "500 10px Inter, system-ui, sans-serif";
         ctx.textAlign = "center";
@@ -385,8 +456,8 @@ export default function FloorPlanCanvas() {
     // --- Internal walls (dashed) + otwory ---
     for (const wp of intPositions) {
       const wall = wp.wall;
-      const s = toCanvas(wp.start.x, wp.start.y, cw, ch);
-      const e = toCanvas(wp.end.x, wp.end.y, cw, ch);
+      const s = toCanvas(wp.start.x + off.x, wp.start.y + off.y, cw, ch);
+      const e = toCanvas(wp.end.x + off.x, wp.end.y + off.y, cw, ch);
       ctx.save(); ctx.setLineDash([6, 4]); ctx.strokeStyle = intWallColor; ctx.lineWidth = 2;
       ctx.beginPath(); ctx.moveTo(s.cx, s.cy); ctx.lineTo(e.cx, e.cy); ctx.stroke(); ctx.restore();
 
@@ -416,8 +487,8 @@ export default function FloorPlanCanvas() {
       const isSelected = wall.id === selectedWallId;
       const isHovered = i === hoveredRef.current && drawTool === "select" && !dragState;
 
-      const s = toCanvas(wp.start.x, wp.start.y, cw, ch);
-      const e = toCanvas(wp.end.x, wp.end.y, cw, ch);
+      const s = toCanvas(wp.start.x + off.x, wp.start.y + off.y, cw, ch);
+      const e = toCanvas(wp.end.x + off.x, wp.end.y + off.y, cw, ch);
 
       const cat = getWallEntry(wall.type);
       const thickPx = cat.thickness * scale;
@@ -450,8 +521,8 @@ export default function FloorPlanCanvas() {
           const r = resolveOpeningMm(
             wall,
             op,
-            isTopFloorView && wall.category === "external" && project.roof ? project.roof : null,
-            isTopFloorView && wall.category === "external" && project.roof ? roofBoundsForPlan : null
+            isTopFloorView && wall.category === "external" && roofForPlan ? roofForPlan : null,
+            isTopFloorView && wall.category === "external" && roofForPlan ? roofBoundsForPlan : null
           );
           if (r.width < 2) continue;
           const startFrac = Math.max(0, Math.min(1, r.position / wLen));
@@ -512,10 +583,10 @@ export default function FloorPlanCanvas() {
 
         const color = isDragging ? dragColor : isVertexHovered ? vertexHoverColor : vertexColor;
         const r = isDragging ? 7 : isVertexHovered ? 6 : 4;
-        drawVertexCircle(pt.x, pt.y, color, r);
+        drawVertexCircle(pt.x + off.x, pt.y + off.y, color, r);
 
         if (isVertexHovered && !isDragging) {
-          const p = toCanvas(pt.x, pt.y, cw, ch);
+          const p = toCanvas(pt.x + off.x, pt.y + off.y, cw, ch);
           ctx.strokeStyle = vertexHoverColor;
           ctx.lineWidth = 1.5;
           ctx.beginPath(); ctx.arc(p.cx, p.cy, 10, 0, Math.PI * 2); ctx.stroke();
@@ -526,7 +597,7 @@ export default function FloorPlanCanvas() {
     // ======= DRAG MODE PREVIEW =======
     if (dragState) {
       if (dragState.target.type === "vertex") {
-        const p = toCanvas(dragState.currentPos.x, dragState.currentPos.y, cw, ch);
+        const p = toCanvas(dragState.currentPos.x + off.x, dragState.currentPos.y + off.y, cw, ch);
         ctx.strokeStyle = dragColor;
         ctx.lineWidth = 2;
         ctx.setLineDash([4, 3]);
@@ -542,7 +613,7 @@ export default function FloorPlanCanvas() {
         const w = allWalls[dragState.target.wallIndex];
         if (w) {
           const lenM = (wallLength(w) / 1000).toFixed(2);
-          const mid = toCanvas((w.start.x + w.end.x) / 2, (w.start.y + w.end.y) / 2, cw, ch);
+          const mid = toCanvas((w.start.x + w.end.x) / 2 + off.x, (w.start.y + w.end.y) / 2 + off.y, cw, ch);
           ctx.font = "600 10px Inter, system-ui, sans-serif";
           ctx.fillStyle = dragColor;
           ctx.textAlign = "center";
@@ -552,8 +623,8 @@ export default function FloorPlanCanvas() {
         const w = allWalls[dragState.target.wallIndex];
         if (w) {
           const wp = computeFloorPlanPositions([w])[0];
-          const s = toCanvas(wp.start.x, wp.start.y, cw, ch);
-          const e = toCanvas(wp.end.x, wp.end.y, cw, ch);
+          const s = toCanvas(wp.start.x + off.x, wp.start.y + off.y, cw, ch);
+          const e = toCanvas(wp.end.x + off.x, wp.end.y + off.y, cw, ch);
           const nx = wp.normal.x * 18;
           const ny = wp.normal.y * 18;
           ctx.strokeStyle = dragColor;
@@ -577,8 +648,8 @@ export default function FloorPlanCanvas() {
           w.id === selectedWallId ||
           hoveredMidWallIdxRef.current === i;
         if (!show) continue;
-        const mx = (w.start.x + w.end.x) / 2;
-        const my = (w.start.y + w.end.y) / 2;
+        const mx = (w.start.x + w.end.x) / 2 + off.x;
+        const my = (w.start.y + w.end.y) / 2 + off.y;
         const p = toCanvas(mx, my, cw, ch);
         ctx.fillStyle = edgeHandleColor;
         ctx.strokeStyle = isDark ? "#fff" : "#0f172a";
@@ -601,10 +672,10 @@ export default function FloorPlanCanvas() {
         ctx.strokeStyle = isDark ? "rgba(148,163,184,0.6)" : "rgba(71,85,105,0.55)";
         ctx.lineWidth = 1;
         ctx.beginPath();
-        const p0 = toCanvas(slabPoly[0].x, slabPoly[0].y, cw, ch);
+        const p0 = toCanvas(slabPoly[0].x + off.x, slabPoly[0].y + off.y, cw, ch);
         ctx.moveTo(p0.cx, p0.cy);
         for (let i = 1; i < slabPoly.length; i++) {
-          const p = toCanvas(slabPoly[i].x, slabPoly[i].y, cw, ch);
+          const p = toCanvas(slabPoly[i].x + off.x, slabPoly[i].y + off.y, cw, ch);
           ctx.lineTo(p.cx, p.cy);
         }
         ctx.closePath();
@@ -623,10 +694,10 @@ export default function FloorPlanCanvas() {
           : (isDark ? "rgba(244,114,182,0.12)" : "rgba(219,39,119,0.08)");
         ctx.lineWidth = 1.5;
         ctx.beginPath();
-        const p0 = toCanvas(co.vertices[0].x, co.vertices[0].y, cw, ch);
+        const p0 = toCanvas(co.vertices[0].x + off.x, co.vertices[0].y + off.y, cw, ch);
         ctx.moveTo(p0.cx, p0.cy);
         for (let i = 1; i < co.vertices.length; i++) {
-          const p = toCanvas(co.vertices[i].x, co.vertices[i].y, cw, ch);
+          const p = toCanvas(co.vertices[i].x + off.x, co.vertices[i].y + off.y, cw, ch);
           ctx.lineTo(p.cx, p.cy);
         }
         ctx.closePath();
@@ -637,7 +708,7 @@ export default function FloorPlanCanvas() {
         let cxp = 0, cyp = 0;
         for (const v of co.vertices) { cxp += v.x; cyp += v.y; }
         cxp /= co.vertices.length; cyp /= co.vertices.length;
-        const lp = toCanvas(cxp, cyp, cw, ch);
+        const lp = toCanvas(cxp + off.x, cyp + off.y, cw, ch);
         ctx.setLineDash([]);
         ctx.fillStyle = isDark ? "#fef3c7" : "#7c2d12";
         ctx.font = "600 10px Inter, system-ui, sans-serif";
@@ -650,7 +721,7 @@ export default function FloorPlanCanvas() {
 
     // ======= STAIRS OVERLAY =======
     if (activeFloor) {
-      const stairsOnFloor = project.stairs.filter((s) => s.fromFloorId === activeFloor.id);
+      const stairsOnFloor = (activeBuilding?.stairs ?? []).filter((s) => s.fromFloorId === activeFloor.id);
       for (const st of stairsOnFloor) {
         const fp = stairFootprint(st);
         ctx.save();
@@ -658,10 +729,10 @@ export default function FloorPlanCanvas() {
         ctx.fillStyle = isDark ? "rgba(96,165,250,0.15)" : "rgba(37,99,235,0.1)";
         ctx.lineWidth = 1.5;
         ctx.beginPath();
-        const p0 = toCanvas(fp[0].x, fp[0].y, cw, ch);
+        const p0 = toCanvas(fp[0].x + off.x, fp[0].y + off.y, cw, ch);
         ctx.moveTo(p0.cx, p0.cy);
         for (let i = 1; i < fp.length; i++) {
-          const p = toCanvas(fp[i].x, fp[i].y, cw, ch);
+          const p = toCanvas(fp[i].x + off.x, fp[i].y + off.y, cw, ch);
           ctx.lineTo(p.cx, p.cy);
         }
         ctx.closePath();
@@ -673,10 +744,10 @@ export default function FloorPlanCanvas() {
         const sin = Math.sin((st.rotation * Math.PI) / 180);
         for (let i = 1; i < st.stepCount; i++) {
           const ax = i * st.treadDepth;
-          const a = { x: st.origin.x + ax * cos, y: st.origin.y + ax * sin };
+          const a = { x: st.origin.x + ax * cos + off.x, y: st.origin.y + ax * sin + off.y };
           const b = {
-            x: st.origin.x + ax * cos - st.width * sin,
-            y: st.origin.y + ax * sin + st.width * cos,
+            x: st.origin.x + ax * cos - st.width * sin + off.x,
+            y: st.origin.y + ax * sin + st.width * cos + off.y,
           };
           const ca = toCanvas(a.x, a.y, cw, ch);
           const cbp = toCanvas(b.x, b.y, cw, ch);
@@ -689,12 +760,12 @@ export default function FloorPlanCanvas() {
         // arrow — direction (bieg A)
         const arrowLen = st.stepCount * st.treadDepth;
         const mid = {
-          x: st.origin.x + (arrowLen / 2) * cos - (st.width / 2) * sin,
-          y: st.origin.y + (arrowLen / 2) * sin + (st.width / 2) * cos,
+          x: st.origin.x + (arrowLen / 2) * cos - (st.width / 2) * sin + off.x,
+          y: st.origin.y + (arrowLen / 2) * sin + (st.width / 2) * cos + off.y,
         };
         const tip = {
-          x: st.origin.x + arrowLen * 0.9 * cos - (st.width / 2) * sin,
-          y: st.origin.y + arrowLen * 0.9 * sin + (st.width / 2) * cos,
+          x: st.origin.x + arrowLen * 0.9 * cos - (st.width / 2) * sin + off.x,
+          y: st.origin.y + arrowLen * 0.9 * sin + (st.width / 2) * cos + off.y,
         };
         const cm = toCanvas(mid.x, mid.y, cw, ch);
         const ct = toCanvas(tip.x, tip.y, cw, ch);
@@ -716,8 +787,8 @@ export default function FloorPlanCanvas() {
     if (drawState && drawTool === "draw") {
       const sP = drawState.startPlan;
       const eP = drawState.currentPlan;
-      const s = toCanvas(sP.x, sP.y, cw, ch);
-      const e = toCanvas(eP.x, eP.y, cw, ch);
+      const s = toCanvas(sP.x + off.x, sP.y + off.y, cw, ch);
+      const e = toCanvas(eP.x + off.x, eP.y + off.y, cw, ch);
 
       ctx.save(); ctx.setLineDash([6, 4]); ctx.strokeStyle = drawPreviewColor; ctx.lineWidth = 2.5;
       ctx.beginPath(); ctx.moveTo(s.cx, s.cy); ctx.lineTo(e.cx, e.cy); ctx.stroke(); ctx.restore();
@@ -746,8 +817,8 @@ export default function FloorPlanCanvas() {
         ctx.fillText(labelText, pmx, pmy - 20);
       }
 
-      drawVertexCircle(sP.x, sP.y, drawPreviewColor, 5);
-      drawVertexCircle(eP.x, eP.y, drawPreviewColor, 5);
+      drawVertexCircle(sP.x + off.x, sP.y + off.y, drawPreviewColor, 5);
+      drawVertexCircle(eP.x + off.x, eP.y + off.y, drawPreviewColor, 5);
 
       if (shiftHeldRef.current && previewLen > 100) {
         ctx.save();
@@ -760,7 +831,7 @@ export default function FloorPlanCanvas() {
       }
 
       if (drawState.wallCount > 0) {
-        const origin = toCanvas(drawState.originPlan.x, drawState.originPlan.y, cw, ch);
+        const origin = toCanvas(drawState.originPlan.x + off.x, drawState.originPlan.y + off.y, cw, ch);
         const nearOrigin = isNearOrigin(eP, cw, ch);
 
         ctx.save();
@@ -771,7 +842,7 @@ export default function FloorPlanCanvas() {
         ctx.restore();
 
         if (nearOrigin) {
-          const o = toCanvas(drawState.originPlan.x, drawState.originPlan.y, cw, ch);
+          const o = toCanvas(drawState.originPlan.x + off.x, drawState.originPlan.y + off.y, cw, ch);
           ctx.strokeStyle = closeHintColor; ctx.lineWidth = 2;
           ctx.beginPath(); ctx.arc(o.cx, o.cy, 10, 0, Math.PI * 2); ctx.stroke();
           ctx.fillStyle = closeHintColor; ctx.globalAlpha = 0.2;
@@ -780,12 +851,13 @@ export default function FloorPlanCanvas() {
         }
       }
 
-      drawVertexCircle(drawState.originPlan.x, drawState.originPlan.y, drawPreviewColor, 6);
+      drawVertexCircle(drawState.originPlan.x + off.x, drawState.originPlan.y + off.y, drawPreviewColor, 6);
     }
   }, [
     extPositions, intPositions, ghostExtPositions, ghostIntPositions,
     selectedWallId, theme, bounds, getTransform, toCanvas, drawState,
     drawTool, ghostFloor, dragState, allWalls, allPositions, activeFloor, project,
+    off, otherBuildingsSiteData, activeBuilding, activeBuilding?.roof,
   ]);
 
   // Resize handling
@@ -821,12 +893,14 @@ export default function FloorPlanCanvas() {
       const cy = e.clientY - rect.top;
       const cw = rect.width; const ch = rect.height;
       const { px, py } = toPlan(cx, cy, cw, ch);
+      const lx = px - off.x;
+      const ly = py - off.y;
       const { scale } = getTransform(cw, ch);
       const vertexThreshMM = VERTEX_HIT_PX / scale;
       const midThreshMM = MIDPOINT_HIT_PX / scale;
 
-      // Priority 1: vertex
-      const vHit = hitTestVertex(allWalls, px, py, vertexThreshMM);
+      // Priority 1: vertex (współrzędne lokalne aktywnego budynku)
+      const vHit = hitTestVertex(allWalls, lx, ly, vertexThreshMM);
       if (vHit) {
         wallClickArmRef.current = null;
         pushUndo();
@@ -842,7 +916,7 @@ export default function FloorPlanCanvas() {
       }
 
       // Priority 2: midpoint — edge resize along wall axis
-      const mHit = hitTestWallMidpoint(allWalls, px, py, midThreshMM);
+      const mHit = hitTestWallMidpoint(allWalls, lx, ly, midThreshMM);
       if (mHit) {
         wallClickArmRef.current = null;
         pushUndo();
@@ -854,10 +928,10 @@ export default function FloorPlanCanvas() {
             start0: { ...w.start },
             end0: { ...w.end },
             u0: wallUnitAlong(w),
-            mouseStart: { x: px, y: py },
+            mouseStart: { x: lx, y: ly },
           },
-          startPos: { x: px, y: py },
-          currentPos: { x: px, y: py },
+          startPos: { x: lx, y: ly },
+          currentPos: { x: lx, y: ly },
         };
         dragStateRef.current = newDrag;
         setDragState(newDrag);
@@ -866,12 +940,12 @@ export default function FloorPlanCanvas() {
         return;
       }
 
-      const wallIdx = hitTestWall(allPositions, px, py, 500);
+      const wallIdx = hitTestWall(allPositions, lx, ly, 500);
       // Podział ściany — rejestrujemy na mousedown (działa na Macu; sam „click” z ⌥ bywa odrzucany przez przeglądarkę)
       if (wallIdx >= 0 && wantsWallSplitModifier(e)) {
         wallClickArmRef.current = null;
         const wall = allWalls[wallIdx];
-        const proj = projectPointOntoSegment({ x: px, y: py }, wall.start, wall.end);
+        const proj = projectPointOntoSegment({ x: lx, y: ly }, wall.start, wall.end);
         splitWall(activeFloor.id, wall.id, proj.point);
         e.preventDefault();
         return;
@@ -883,7 +957,7 @@ export default function FloorPlanCanvas() {
         pendingWallDragRef.current = {
           wallIndex: wallIdx,
           wallSnapshot: { ...wall },
-          mouseStart: { x: px, y: py },
+          mouseStart: { x: lx, y: ly },
           clientStartX: e.clientX,
           clientStartY: e.clientY,
         };
@@ -894,7 +968,7 @@ export default function FloorPlanCanvas() {
         wallClickArmRef.current = null;
       }
     },
-    [drawTool, activeFloor, allWalls, allPositions, toPlan, getTransform, pushUndo, selectWall, splitWall]
+    [drawTool, activeFloor, allWalls, allPositions, toPlan, getTransform, pushUndo, selectWall, splitWall, off.x, off.y]
   );
 
   const handleMouseMove = useCallback(
@@ -906,6 +980,8 @@ export default function FloorPlanCanvas() {
       const cy = e.clientY - rect.top;
       const cw = rect.width; const ch = rect.height;
       const { px, py } = toPlan(cx, cy, cw, ch);
+      const lx = px - off.x;
+      const ly = py - off.y;
 
       // Oczekiwanie na próg ruchu przed przesunięciem równoległym (unika przypadkowych przesunięć przy kliknięciu)
       const pw0 = pendingWallDragRef.current;
@@ -913,7 +989,7 @@ export default function FloorPlanCanvas() {
         const ddx = e.clientX - pw0.clientStartX;
         const ddy = e.clientY - pw0.clientStartY;
         if (ddx * ddx + ddy * ddy >= WALL_DRAG_THRESHOLD_PX * WALL_DRAG_THRESHOLD_PX) {
-          const snapped = snapPointFull({ x: px, y: py }, cw, ch);
+          const snapped = snapPointFull({ x: lx, y: ly }, cw, ch);
           pushUndo();
           const newDrag: DragState = {
             target: {
@@ -943,7 +1019,7 @@ export default function FloorPlanCanvas() {
 
       // --- DRAGGING ---
       if (dragState) {
-        const snapped = snapPointFull({ x: px, y: py }, cw, ch);
+        const snapped = snapPointFull({ x: lx, y: ly }, cw, ch);
 
         const updateWall = useStore.getState().updateWall;
 
@@ -996,7 +1072,7 @@ export default function FloorPlanCanvas() {
       // --- DRAW MODE ---
       if (drawTool === "draw") {
         if (drawState) {
-          const snapped = snapPointFull({ x: px, y: py }, cw, ch, drawState.startPlan);
+          const snapped = snapPointFull({ x: lx, y: ly }, cw, ch, drawState.startPlan);
           setDrawState((prev) => prev ? { ...prev, currentPlan: snapped } : null);
         }
         canvas.style.cursor = "crosshair";
@@ -1007,7 +1083,7 @@ export default function FloorPlanCanvas() {
       const { scale } = getTransform(cw, ch);
       const vertexThreshMM = VERTEX_HIT_PX / scale;
 
-      const vHit = hitTestVertex(allWalls, px, py, vertexThreshMM);
+      const vHit = hitTestVertex(allWalls, lx, ly, vertexThreshMM);
       if (vHit) {
         hoveredVertexRef.current = vHit;
         hoveredMidWallIdxRef.current = null;
@@ -1020,7 +1096,7 @@ export default function FloorPlanCanvas() {
       hoveredVertexRef.current = null;
 
       const midThreshMM = MIDPOINT_HIT_PX / scale;
-      const mHit = hitTestWallMidpoint(allWalls, px, py, midThreshMM);
+      const mHit = hitTestWallMidpoint(allWalls, lx, ly, midThreshMM);
       if (mHit) {
         hoveredMidWallIdxRef.current = mHit.wallIndex;
         hoveredRef.current = -1;
@@ -1031,14 +1107,14 @@ export default function FloorPlanCanvas() {
 
       hoveredMidWallIdxRef.current = null;
 
-      const idx = hitTestWall(extPositions, px, py, 500);
+      const idx = hitTestWall(extPositions, lx, ly, 500);
       if (idx !== hoveredRef.current) {
         hoveredRef.current = idx;
         canvas.style.cursor = idx >= 0 ? "grab" : "default";
         draw();
       }
     },
-    [extPositions, toPlan, draw, drawTool, drawState, dragState, activeFloor, allWalls, getTransform, moveVertex, allPositions, pushUndo]
+    [extPositions, toPlan, draw, drawTool, drawState, dragState, activeFloor, allWalls, getTransform, moveVertex, allPositions, pushUndo, off.x, off.y]
   );
 
   const handleMouseUp = useCallback(
@@ -1067,12 +1143,46 @@ export default function FloorPlanCanvas() {
       const cy = e.clientY - rect.top;
       const cw = rect.width; const ch = rect.height;
       const { px, py } = toPlan(cx, cy, cw, ch);
+      const lx = px - off.x;
+      const ly = py - off.y;
 
       // --- SELECT MODE ---
       if (drawTool === "select") {
+        if (sitePlanMode) {
+          for (const b of project.buildings) {
+            if (activeBuilding && b.id === activeBuilding.id) continue;
+            const f = b.floors.find((fl) => fl.level === sharedFloorLevel);
+            if (!f || f.walls.length === 0) continue;
+            const ox = b.position.x;
+            const oy = b.position.y;
+            const lbx = px - ox;
+            const lby = py - oy;
+            const extW = f.walls.filter((w) => w.category === "external");
+            const intW = f.walls.filter((w) => w.category === "internal");
+            const extP = computeFloorPlanPositions(extW);
+            const intP = computeFloorPlanPositions(intW);
+            const extIdx = hitTestWall(extP, lbx, lby, 500);
+            if (extIdx >= 0 && extW[extIdx]) {
+              setActiveBuilding(b.id);
+              setActiveFloor(f.id);
+              selectWall(extW[extIdx].id);
+              useStore.getState().selectStair(null);
+              return;
+            }
+            const intIdx = hitTestWall(intP, lbx, lby, 500);
+            if (intIdx >= 0 && intW[intIdx]) {
+              setActiveBuilding(b.id);
+              setActiveFloor(f.id);
+              selectWall(intW[intIdx].id);
+              useStore.getState().selectStair(null);
+              return;
+            }
+          }
+        }
+
         // Try stair hit first — schody rysowane na tym piętrze
-        const stairsOnFloor = project.stairs.filter((s) => s.fromFloorId === activeFloor.id);
-        const stairHit = hitTestStair(stairsOnFloor, { x: px, y: py });
+        const stairsOnFloor = (activeBuilding?.stairs ?? []).filter((s) => s.fromFloorId === activeFloor.id);
+        const stairHit = hitTestStair(stairsOnFloor, { x: lx, y: ly });
         if (stairHit) {
           wallClickArmRef.current = null;
           useStore.getState().selectStair(stairHit.id);
@@ -1080,8 +1190,8 @@ export default function FloorPlanCanvas() {
           return;
         }
 
-        const extIdx = hitTestWall(extPositions, px, py, 500);
-        const intIdx = extIdx >= 0 ? -1 : hitTestWall(intPositions, px, py, 500);
+        const extIdx = hitTestWall(extPositions, lx, ly, 500);
+        const intIdx = extIdx >= 0 ? -1 : hitTestWall(intPositions, lx, ly, 500);
         const hitWallId = extIdx >= 0
           ? extWalls[extIdx].id
           : intIdx >= 0
@@ -1092,7 +1202,7 @@ export default function FloorPlanCanvas() {
           wallClickArmRef.current = null;
           const hitWall = activeFloor.walls.find((w) => w.id === hitWallId);
           if (hitWall) {
-            const proj = projectPointOntoSegment({ x: px, y: py }, hitWall.start, hitWall.end);
+            const proj = projectPointOntoSegment({ x: lx, y: ly }, hitWall.start, hitWall.end);
             splitWall(activeFloor.id, hitWallId, proj.point);
             return;
           }
@@ -1127,8 +1237,8 @@ export default function FloorPlanCanvas() {
 
       if (!drawState) {
         // Start from an existing wall — split it and begin polyline from that point.
-        const extIdx = hitTestWall(extPositions, px, py, 500);
-        const intIdx = extIdx >= 0 ? -1 : hitTestWall(intPositions, px, py, 500);
+        const extIdx = hitTestWall(extPositions, lx, ly, 500);
+        const intIdx = extIdx >= 0 ? -1 : hitTestWall(intPositions, lx, ly, 500);
         const hitWallId = extIdx >= 0
           ? extWalls[extIdx].id
           : intIdx >= 0
@@ -1137,7 +1247,7 @@ export default function FloorPlanCanvas() {
         if (hitWallId) {
           const hitWall = activeFloor.walls.find((w) => w.id === hitWallId);
           if (hitWall) {
-            const proj = projectPointOntoSegment({ x: px, y: py }, hitWall.start, hitWall.end);
+            const proj = projectPointOntoSegment({ x: lx, y: ly }, hitWall.start, hitWall.end);
             const splitPt = splitWall(activeFloor.id, hitWallId, proj.point);
             const startAt = splitPt ?? proj.point;
             setDrawState({
@@ -1150,7 +1260,7 @@ export default function FloorPlanCanvas() {
           }
         }
 
-        const snapped = snapPointFull({ x: px, y: py }, cw, ch);
+        const snapped = snapPointFull({ x: lx, y: ly }, cw, ch);
         setDrawState({
           originPlan: snapped,
           startPlan: snapped,
@@ -1160,7 +1270,7 @@ export default function FloorPlanCanvas() {
         return;
       }
 
-      let endPt = snapPointFull({ x: px, y: py }, cw, ch, drawState.startPlan);
+      let endPt = snapPointFull({ x: lx, y: ly }, cw, ch, drawState.startPlan);
 
       if (
         drawWallCategory === "external" &&
@@ -1174,7 +1284,7 @@ export default function FloorPlanCanvas() {
       }
 
       // If endPt lands on an existing wall (edge) and no vertex was hit, split it there.
-      const vertexSnap = snapToVertex({ x: px, y: py }, cw, ch);
+      const vertexSnap = snapToVertex({ x: lx, y: ly }, cw, ch);
       if (!vertexSnap) {
         const extIdxHit = hitTestWall(extPositions, endPt.x, endPt.y, 300);
         const intIdxHit = extIdxHit >= 0 ? -1 : hitTestWall(intPositions, endPt.x, endPt.y, 300);
@@ -1219,7 +1329,7 @@ export default function FloorPlanCanvas() {
         wallCount: prev.wallCount + 1,
       } : null);
     },
-    [drawTool, drawState, activeFloor, project.defaults, addWall, closeOutline, extPositions, intPositions, extWalls, intWalls, toPlan, selectWall, setDrawTool, dragState, drawWallCategory, splitWall, snapToVertex]
+    [drawTool, drawState, activeFloor, project.defaults, addWall, closeOutline, extPositions, intPositions, extWalls, intWalls, toPlan, selectWall, setDrawTool, dragState, drawWallCategory, splitWall, snapToVertex, off.x, off.y, sitePlanMode, sharedFloorLevel, project.buildings, activeBuilding, setActiveBuilding, setActiveFloor]
   );
 
   const handleDoubleClick = useCallback(

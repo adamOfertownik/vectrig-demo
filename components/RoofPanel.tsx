@@ -1,6 +1,6 @@
 "use client";
 
-import { useStore } from "@/lib/store";
+import { useStore, useActiveBuilding } from "@/lib/store";
 import { ROOF_CATALOG, getWallEntry, getWallsByCategory } from "@/lib/catalog";
 import type { RoofType } from "@/lib/types";
 
@@ -13,7 +13,8 @@ const ROOF_ICONS: Record<RoofType, string> = {
 
 export default function RoofPanel() {
   const project = useStore((s) => s.project);
-  const roof = project.roof;
+  const activeBuilding = useActiveBuilding();
+  const roof = activeBuilding?.roof ?? null;
   const setRoof = useStore((s) => s.setRoof);
   const updateRoof = useStore((s) => s.updateRoof);
   const addRoofAnomaly = useStore((s) => s.addRoofAnomaly);

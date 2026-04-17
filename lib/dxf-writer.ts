@@ -3,7 +3,8 @@
 // Sekcja BLOCKS jest wymagana — bez niej AutoCAD może otworzyć pusty rysunek.
 // Widoki: rzut piętra (plan), rozwinięcie ścian (elewacja), strop, dach.
 
-import type { Project, Floor, Roof } from "./types";
+import type { Project, Floor, Roof, Building } from "./types";
+import { allFloorsInProject } from "./project-migrate";
 import { findComponent, getWallEntry } from "./catalog";
 import {
   computeFloorPlanPositions,
@@ -68,8 +69,9 @@ function collectLayers(project: Project): LayerDef[] {
     }
   };
 
-  for (const floor of project.floors) {
-    const tag = floorTag(floor);
+  for (const building of project.buildings) {
+    for (const floor of building.floors) {
+    const tag = floorLayerTag(building, floor);
     add(`${tag}_SCIANY_ZEWN`, COL.EXT_WALL);
     add(`${tag}_SCIANY_WEWN`, COL.INT_WALL, LT_DASH);
     add(`${tag}_OKNA`, COL.WINDOW);
@@ -90,9 +92,10 @@ function collectLayers(project: Project): LayerDef[] {
     add(`${tag}_ELEW_OTWORY`, COL.WINDOW);
     add(`${tag}_ELEW_WYMIARY`, COL.DIM);
     add(`${tag}_ELEW_ETYKIETY`, COL.LABEL);
+    }
   }
 
-  if (project.roof) {
+  if (project.buildings.some((b) => b.roof)) {
     add("DACH_OBRYS", COL.ROOF);
     add("DACH_KALENICA", COL.ROOF, LT_CENTER);
     add("DACH_WYMIARY", COL.DIM);
@@ -104,9 +107,15 @@ function collectLayers(project: Project): LayerDef[] {
   return layers;
 }
 
-function floorTag(floor: Floor): string {
-  if (floor.level === 0) return "PARTER";
-  return `PIETRO_${floor.level}`;
+function sanitizeBuildingSlug(name: string): string {
+  const s = name.replace(/[^a-zA-Z0-9]+/g, "_").replace(/^_|_$/g, "");
+  return (s || "BUD").slice(0, 20).toUpperCase();
+}
+
+function floorLayerTag(building: Building, floor: Floor): string {
+  const slug = sanitizeBuildingSlug(building.name);
+  const level = floor.level === 0 ? "PARTER" : `P${floor.level}`;
+  return `${slug}_${level}`;
 }
 
 // ---------------------------------------------------------------------------
@@ -211,17 +220,18 @@ function r(n: number): string {
 
 function generateFloorPlan(
   floor: Floor,
+  building: Building,
   project: Project,
   offsetX: number,
   offsetY: number,
 ): string[] {
   const entities: string[] = [];
-  const tag = floorTag(floor);
+  const tag = floorLayerTag(building, floor);
 
-  const topFloorId = project.floors[project.floors.length - 1]?.id;
+  const topFloorId = building.floors[building.floors.length - 1]?.id;
   const isTopFloor = floor.id === topFloorId;
   const roofBoundsPlan = computeBoundsFromWalls(
-    project.floors[0]?.walls.filter((w) => w.category === "external") ?? []
+    building.floors[0]?.walls.filter((w) => w.category === "external") ?? []
   );
 
   const extWalls = floor.walls.filter((w) => w.category === "external");
@@ -305,8 +315,8 @@ function generateFloorPlan(
         const r = resolveOpeningMm(
           wall,
           op,
-          isTopFloor && wall.category === "external" && project.roof ? project.roof : null,
-          isTopFloor && wall.category === "external" && project.roof ? roofBoundsPlan : null
+          isTopFloor && wall.category === "external" && building.roof ? building.roof : null,
+          isTopFloor && wall.category === "external" && building.roof ? roofBoundsPlan : null
         );
         if (r.width < 2) continue;
         const startFrac = r.position / wallLen;
@@ -468,7 +478,7 @@ function generateFloorPlan(
   }
 
   // Schody — footprint i numeracja stopni
-  for (const st of project.stairs.filter((s) => s.fromFloorId === floor.id)) {
+  for (const st of building.stairs.filter((s) => s.fromFloorId === floor.id)) {
     const fp = stairFootprint(st);
     if (fp.length >= 3) {
       const pts: [number, number][] = fp.map((v) => [offsetX + v.x, offsetY + v.y]);
@@ -506,18 +516,19 @@ function generateFloorPlan(
 
 function generateElevations(
   floor: Floor,
+  building: Building,
   project: Project,
   offsetX: number,
   offsetY: number,
 ): string[] {
   const entities: string[] = [];
-  const tag = floorTag(floor);
+  const tag = floorLayerTag(building, floor);
   let cursor = offsetX;
 
-  const topFloorId = project.floors[project.floors.length - 1]?.id;
+  const topFloorId = building.floors[building.floors.length - 1]?.id;
   const isTopFloor = floor.id === topFloorId;
   const roofBoundsElev = computeBoundsFromWalls(
-    project.floors[0]?.walls.filter((w) => w.category === "external") ?? []
+    building.floors[0]?.walls.filter((w) => w.category === "external") ?? []
   );
 
   // Title
@@ -590,8 +601,8 @@ function generateElevations(
       const r = resolveOpeningMm(
         wall,
         op,
-        isTopFloor && wall.category === "external" && project.roof ? project.roof : null,
-        isTopFloor && wall.category === "external" && project.roof ? roofBoundsElev : null
+        isTopFloor && wall.category === "external" && building.roof ? building.roof : null,
+        isTopFloor && wall.category === "external" && building.roof ? roofBoundsElev : null
       );
       if (r.width < 2 || r.height < 2) continue;
       const ow = r.width;
@@ -649,13 +660,14 @@ function generateElevations(
 
 function generateRoofPlan(
   roof: Roof,
+  building: Building,
   project: Project,
   offsetX: number,
   offsetY: number,
 ): string[] {
   const entities: string[] = [];
 
-  const topFloor = project.floors[project.floors.length - 1];
+  const topFloor = building.floors[building.floors.length - 1];
   if (!topFloor) return entities;
 
   const extWalls = topFloor.walls.filter((w) => w.category === "external");
@@ -786,15 +798,16 @@ function generateSchedule(project: Project, offsetX: number, offsetY: number): s
   const title = `ZESTAWIENIE ŚCIAN — ${split.totalPanels} paneli, odpad ${split.totalWasteM3.toFixed(3)} m³, obróbka ${(split.totalMachiningSeconds / 3600).toFixed(2)} h`;
   entities.push(text(textLayer, offsetX, offsetY + rowH * 0.3, 300, title, 0, 0));
 
-  const floorsById = new Map(project.floors.map((f) => [f.id, f]));
+  const floorsById = new Map(allFloorsInProject(project).map((f) => [f.id, f]));
   const rows: string[][] = [];
-  for (const floor of project.floors) {
+  for (const floor of allFloorsInProject(project)) {
     for (const wall of floor.walls) {
       const b = split.walls.find((x) => x.wallId === wall.id);
       if (!b) continue;
       const cat = getWallEntry(wall.type);
+      const bname = project.buildings.find((bu) => bu.floors.some((fl) => fl.id === floor.id))?.name ?? "";
       rows.push([
-        floor.name,
+        bname ? `${bname} — ${floor.name}` : floor.name,
         wall.label,
         String(b.wallLengthMM),
         String(b.wallHeightMM),
@@ -908,35 +921,38 @@ export function generateDxf(project: Project): string {
   // --- ENTITIES ---
   const entities: string[] = [];
 
-  // Floor plans — stacked vertically
+  // Floor plans — stacked vertically (z przesunięciem pozycji budynku na działce)
   let floorOffsetY = 0;
-  for (const floor of project.floors) {
-    const extWalls = floor.walls.filter((w) => w.category === "external");
-    const positions = computeFloorPlanPositions(extWalls);
-    const bounds = computeBounds(positions);
+  for (const building of project.buildings) {
+    for (const floor of building.floors) {
+      const extWalls = floor.walls.filter((w) => w.category === "external");
+      const positions = computeFloorPlanPositions(extWalls);
+      const bounds = computeBounds(positions);
 
-    entities.push(...generateFloorPlan(floor, project, 0, floorOffsetY));
-    floorOffsetY += bounds.height + 3000;
-  }
+      entities.push(...generateFloorPlan(floor, building, project, building.position.x, floorOffsetY + building.position.y));
+      floorOffsetY += bounds.height + 3000;
+    }
 
-  // Roof plan (below floor plans)
-  if (project.roof) {
-    entities.push(...generateRoofPlan(project.roof, project, 0, floorOffsetY));
+    if (building.roof) {
+      entities.push(...generateRoofPlan(building.roof, building, project, building.position.x, floorOffsetY + building.position.y));
 
-    const topFloor = project.floors[project.floors.length - 1];
-    if (topFloor) {
-      const extWalls = topFloor.walls.filter((w) => w.category === "external");
-      const bounds = computeBounds(computeFloorPlanPositions(extWalls));
-      floorOffsetY += bounds.height + project.roof.overhang * 2 + 3000;
+      const topFloor = building.floors[building.floors.length - 1];
+      if (topFloor) {
+        const extWalls = topFloor.walls.filter((w) => w.category === "external");
+        const bounds = computeBounds(computeFloorPlanPositions(extWalls));
+        floorOffsetY += bounds.height + building.roof.overhang * 2 + 3000;
+      }
     }
   }
 
   // Elevation views — to the right of plans
   const elevOffsetX = 25000;
   let elevOffsetY = 0;
-  for (const floor of project.floors) {
-    entities.push(...generateElevations(floor, project, elevOffsetX, elevOffsetY));
-    elevOffsetY += floor.height + 2000;
+  for (const building of project.buildings) {
+    for (const floor of building.floors) {
+      entities.push(...generateElevations(floor, building, project, elevOffsetX + building.position.x, elevOffsetY + building.position.y));
+      elevOffsetY += floor.height + 2000;
+    }
   }
 
   // Zestawienie ścian — below all plans

@@ -72,8 +72,8 @@ export interface Wall {
   type: WallType;
   category: WallCategory;
   label: string;
-  start: Point;              // absolutna pozycja początku (mm)
-  end: Point;                // absolutna pozycja końca (mm)
+  start: Point;              // mm w układzie lokalnym budynku
+  end: Point;                // mm w układzie lokalnym budynku
   height: number;            // mm (z kondygnacji)
   openings: Opening[];
 }
@@ -156,6 +156,22 @@ export interface GableWall {
 }
 
 // ---------------------------------------------------------------------------
+// Budynek — piętra, dach i schody w obrębie jednej bryły na działce
+// ---------------------------------------------------------------------------
+
+export interface Building {
+  id: string;
+  name: string;
+  /** Przesunięcie układu lokalnego na planie działki (mm). */
+  position: Point;
+  floors: Floor[];
+  roof: Roof | null;
+  gableWalls: GableWall[];
+  backWallEnabled: boolean;
+  stairs: Stair[];
+}
+
+// ---------------------------------------------------------------------------
 // Projekt — korzeń hierarchii
 // ---------------------------------------------------------------------------
 
@@ -163,11 +179,7 @@ export interface Project {
   id: string;
   name: string;
   defaults: ProjectDefaults;
-  floors: Floor[];
-  roof: Roof | null;
-  gableWalls: GableWall[];
-  backWallEnabled: boolean;
-  stairs: Stair[];
+  buildings: Building[];
   createdAt: string;
 }
 
@@ -206,7 +218,7 @@ export interface Stair {
   fromFloorId: string;
   toFloorId: string;
   type: StairType;
-  origin: Point;             // lewy-górny bounding box biegu A w mm (w planie absolutnie)
+  origin: Point;             // lewy-górny bounding box biegu A w mm (układ lokalny budynku)
   rotation: number;          // deg — obrót biegu A w płaszczyźnie planu
   width: number;             // mm szerokość biegu
   treadDepth: number;        // mm głębokość stopnia

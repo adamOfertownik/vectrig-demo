@@ -3,7 +3,8 @@ import type { Project, Floor, Wall, Roof, Quote, BomLine } from "./types";
 import { findComponent, getCncDefaults, getWallEntry } from "./catalog";
 import { wallLength, shoelaceAreaSqm } from "./geometry";
 import { splitProjectPanels } from "./panel-split";
-import { roofSurfaceAreaSqm } from "./roof-area";
+import { roofSurfaceAreaSqm, roofSurfaceAreaSqmForBuilding } from "./roof-area";
+import { allFloorsInProject, allStairsInProject } from "./project-migrate";
 
 export { roofSurfaceAreaSqm };
 
@@ -72,8 +73,8 @@ function slabVolumeCubicM(floor: Floor): number {
 // Geometria dachu
 // ---------------------------------------------------------------------------
 
-function roofVolumeCubicM(roof: Roof, project: Project): number {
-  return roofSurfaceAreaSqm(project) * (roof.thickness / 1000);
+function roofVolumeCubicM(roof: Roof, areaSqm: number): number {
+  return areaSqm * (roof.thickness / 1000);
 }
 
 function dormerExtraVolumeCubicM(roof: Roof): number {
@@ -97,7 +98,7 @@ export function calculateQuote(project: Project): Quote {
 
   const wallVolumeByType = new Map<string, { volume: number; area: number }>();
 
-  for (const floor of project.floors) {
+  for (const floor of allFloorsInProject(project)) {
     for (const wall of floor.walls) {
       const vol = wallVolumeCubicM(wall);
       const area = wallNetAreaSqm(wall);
@@ -123,7 +124,7 @@ export function calculateQuote(project: Project): Quote {
     });
   }
 
-  for (const floor of project.floors) {
+  for (const floor of allFloorsInProject(project)) {
     if (floor.slabThickness <= 0) continue;
     const vol = slabVolumeCubicM(floor);
     if (vol <= 0) continue;
@@ -140,33 +141,41 @@ export function calculateQuote(project: Project): Quote {
     });
   }
 
-  if (project.roof) {
-    const roofVol = roofVolumeCubicM(project.roof, project);
-    const dormerVol = dormerExtraVolumeCubicM(project.roof);
-    const totalRoofVol = roofVol + dormerVol;
+  const totalRoofArea = roofSurfaceAreaSqm(project);
+  let aggregateRoofVol = 0;
+  let aggregateDormerVol = 0;
+  let dormerCountTotal = 0;
+  for (const b of project.buildings) {
+    if (!b.roof) continue;
+    const areaB = roofSurfaceAreaSqmForBuilding(b);
+    aggregateRoofVol += roofVolumeCubicM(b.roof, areaB);
+    aggregateDormerVol += dormerExtraVolumeCubicM(b.roof);
+    dormerCountTotal += b.roof.anomalies.filter((a) => a.type === "dormer").length;
+  }
+  if (aggregateRoofVol > 0 || aggregateDormerVol > 0) {
+    const totalRoofVol = aggregateRoofVol + aggregateDormerVol;
     const roofCat = getWallEntry(project.defaults.roofType);
     totalVolumeCLT += totalRoofVol;
     lines.push({
       category: "roof",
-      description: `Dach CLT (${r2(roofSurfaceAreaSqm(project))} m², ${r3(totalRoofVol)} m³)`,
+      description: `Dach CLT (${r2(totalRoofArea)} m², ${r3(totalRoofVol)} m³)`,
       quantity: r3(totalRoofVol),
       unit: "m³",
       unitPrice: roofCat.pricePerCubicM,
       total: Math.round(totalRoofVol * roofCat.pricePerCubicM),
     });
 
-    if (dormerVol > 0) {
-      const dormerCount = project.roof.anomalies.filter((a) => a.type === "dormer").length;
+    if (aggregateDormerVol > 0) {
       lines.push({
         category: "roof",
-        description: `Lukarny (${dormerCount} szt, dodatkowe ${r3(dormerVol)} m³)`,
-        quantity: dormerCount, unit: "szt", unitPrice: 0, total: 0,
+        description: `Lukarny (${dormerCountTotal} szt, dodatkowe ${r3(aggregateDormerVol)} m³)`,
+        quantity: dormerCountTotal, unit: "szt", unitPrice: 0, total: 0,
       });
     }
   }
 
   const compCounts = new Map<string, number>();
-  for (const floor of project.floors) {
+  for (const floor of allFloorsInProject(project)) {
     for (const wall of floor.walls) {
       for (const op of wall.openings) {
         compCounts.set(op.componentId, (compCounts.get(op.componentId) ?? 0) + 1);
@@ -183,10 +192,11 @@ export function calculateQuote(project: Project): Quote {
   }
 
   // --- Schody ---
-  if (project.stairs.length > 0) {
+  const allStairs = allStairsInProject(project);
+  if (allStairs.length > 0) {
     let totalStairVol = 0;
-    const floorsById = new Map(project.floors.map((f) => [f.id, f]));
-    for (const st of project.stairs) {
+    const floorsById = new Map(allFloorsInProject(project).map((f) => [f.id, f]));
+    for (const st of allStairs) {
       const fromF = floorsById.get(st.fromFloorId);
       const toF = floorsById.get(st.toFloorId);
       if (!fromF) continue;
@@ -199,7 +209,7 @@ export function calculateQuote(project: Project): Quote {
       totalVolumeCLT += totalStairVol;
       lines.push({
         category: "slab",
-        description: `Schody CLT (${project.stairs.length} szt, ${r3(totalStairVol)} m³)`,
+        description: `Schody CLT (${allStairs.length} szt, ${r3(totalStairVol)} m³)`,
         quantity: r3(totalStairVol),
         unit: "m³",
         unitPrice: stairCat.pricePerCubicM,
@@ -245,7 +255,7 @@ export function calculateQuote(project: Project): Quote {
 
   // --- CNC: wycinanie obwodów otworów ---
   let totalOpeningPerimeterM = 0;
-  for (const floor of project.floors) {
+  for (const floor of allFloorsInProject(project)) {
     for (const wall of floor.walls) {
       totalOpeningPerimeterM += wallOpeningsPerimeterM(wall);
     }

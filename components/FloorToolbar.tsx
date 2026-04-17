@@ -1,6 +1,6 @@
 "use client";
 
-import { useStore, useActiveFloor } from "@/lib/store";
+import { useStore, useActiveFloor, useActiveBuilding } from "@/lib/store";
 import { getWallsByCategory } from "@/lib/catalog";
 import type { WallCategory } from "@/lib/types";
 
@@ -28,11 +28,19 @@ export default function FloorToolbar() {
   const setSlabEdit = useStore((s) => s.setSlabEdit);
   const addStair = useStore((s) => s.addStair);
   const selectStair = useStore((s) => s.selectStair);
+  const activeBuildingId = useStore((s) => s.activeBuildingId);
+  const setActiveBuilding = useStore((s) => s.setActiveBuilding);
+  const addBuilding = useStore((s) => s.addBuilding);
+  const removeBuilding = useStore((s) => s.removeBuilding);
+  const duplicateBuilding = useStore((s) => s.duplicateBuilding);
+  const sitePlanMode = useStore((s) => s.sitePlanMode);
+  const setSitePlanMode = useStore((s) => s.setSitePlanMode);
   // Re-render po edycji cennika (lista stropów w selekcie).
   useStore((s) => s.catalogOverrides);
 
   const floor = useActiveFloor();
-  const floors = project.floors;
+  const activeBuilding = useActiveBuilding();
+  const floors = activeBuilding?.floors ?? [];
   const activeFloor = floors.find((f) => f.id === activeFloorId) ?? floors[0];
 
   function handleFloorTab(floorId: string) {
@@ -47,6 +55,52 @@ export default function FloorToolbar() {
 
   return (
     <div className="bg-panel border-b border-border">
+      <div className="flex items-center gap-2 px-3 py-1 border-b border-border/80 flex-wrap text-xs">
+        <span className="text-[10px] uppercase tracking-wide text-muted font-semibold">Budynek</span>
+        <select
+          className="text-xs bg-panel border border-border rounded px-2 py-1 min-w-[140px]"
+          value={activeBuildingId ?? activeBuilding?.id ?? ""}
+          onChange={(e) => setActiveBuilding(e.target.value || null)}
+        >
+          {project.buildings.map((b) => (
+            <option key={b.id} value={b.id}>
+              {b.name}
+            </option>
+          ))}
+        </select>
+        <button type="button" className="btn btn-sm" onClick={() => addBuilding()}>
+          + Nowy
+        </button>
+        <button
+          type="button"
+          className="btn btn-sm"
+          onClick={() => activeBuilding && duplicateBuilding(activeBuilding.id)}
+          disabled={!activeBuilding}
+        >
+          Duplikuj
+        </button>
+        <button
+          type="button"
+          className="btn btn-sm btn-danger"
+          onClick={() => {
+            if (!activeBuilding || project.buildings.length <= 1) return;
+            if (!confirm(`Usunąć budynek „${activeBuilding.name}”?`)) return;
+            removeBuilding(activeBuilding.id);
+          }}
+          disabled={!activeBuilding || project.buildings.length <= 1}
+        >
+          Usuń
+        </button>
+        <label className="flex items-center gap-1.5 cursor-pointer select-none ml-2">
+          <input
+            type="checkbox"
+            className="w-3.5 h-3.5 accent-accent"
+            checked={sitePlanMode}
+            onChange={(e) => setSitePlanMode(e.target.checked)}
+          />
+          <span>Plan sytuacyjny (wszystkie budynki)</span>
+        </label>
+      </div>
       {/* Main toolbar row */}
       <div className="flex items-center gap-1 px-3 py-1.5" data-tour="floors">
         {floors.map((f) => {
@@ -72,9 +126,9 @@ export default function FloorToolbar() {
           className={`btn btn-sm ${viewMode === "roof" ? "btn-primary" : ""}`}
         >
           Dach
-          {project.roof && (
+          {activeBuilding?.roof && (
             <span className={`text-[10px] ${viewMode === "roof" ? "opacity-80" : "text-muted"}`}>
-              ({project.roof.type})
+              ({activeBuilding.roof.type})
             </span>
           )}
         </button>
@@ -253,7 +307,7 @@ export default function FloorToolbar() {
                 const toFloor = floors[activeIdx + 1];
                 if (!toFloor) return;
                 const id = addStair({
-                  label: `Schody ${project.stairs.length + 1}`,
+                  label: `Schody ${(activeBuilding?.stairs.length ?? 0) + 1}`,
                   fromFloorId: activeFloor.id,
                   toFloorId: toFloor.id,
                   type: "straight",

@@ -1,9 +1,8 @@
 // lib/roof-area.ts — powierzchnia rozwinięta dachu (wspólne dla wyceny i zestawienia)
-import type { Project, Roof } from "./types";
+import type { Building, Project, Roof } from "./types";
 import { shoelaceAreaSqm } from "./geometry";
 
-function roofAreaSqm(roof: Roof, project: Project): number {
-  const groundFloor = project.floors[0];
+function roofAreaSqmForGround(roof: Roof, groundFloor: import("./types").Floor | undefined): number {
   if (!groundFloor) return 0;
 
   const footprint = shoelaceAreaSqm(groundFloor.walls);
@@ -55,7 +54,16 @@ function roofAreaSqm(roof: Roof, project: Project): number {
   return Math.max(0, area - skylightCutout);
 }
 
+/** Powierzchnia dachu jednego budynku (m²). */
+export function roofSurfaceAreaSqmForBuilding(building: Building): number {
+  if (!building.roof) return 0;
+  return roofAreaSqmForGround(building.roof, building.floors[0]);
+}
+
 export function roofSurfaceAreaSqm(project: Project): number {
-  if (!project.roof) return 0;
-  return roofAreaSqm(project.roof, project);
+  let sum = 0;
+  for (const b of project.buildings) {
+    sum += roofSurfaceAreaSqmForBuilding(b);
+  }
+  return sum;
 }

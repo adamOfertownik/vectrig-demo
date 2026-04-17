@@ -3,6 +3,7 @@
 
 import { create } from "zustand";
 import type {
+  Building,
   Project, Floor, Wall, Opening, Roof, RoofAnomaly,
   WallType, WallCategory, ViewMode, ProjectDefaults, RoofType, GableWall, Point,
   SlabCutout, Stair,
@@ -18,9 +19,47 @@ import {
   type CncDefaults,
   type WallCatalogEntry,
 } from "./catalog";
+import {
+  createDefaultProject,
+  createDefaultBuilding,
+  findBuildingIdForFloor,
+  duplicateBuildingStructure,
+} from "./project-migrate";
 
 function computeStairFootprintLocal(stair: Stair): Point[] {
   return stairFootprint(stair);
+}
+
+function getActiveBuilding(project: Project, activeBuildingId: string | null): Building | undefined {
+  if (project.buildings.length === 0) return undefined;
+  if (activeBuildingId) {
+    return project.buildings.find((b) => b.id === activeBuildingId) ?? project.buildings[0];
+  }
+  return project.buildings[0];
+}
+
+function updateBuildingInProject(
+  project: Project,
+  buildingId: string,
+  updater: (b: Building) => Building,
+): Project {
+  return {
+    ...project,
+    buildings: project.buildings.map((b) => (b.id === buildingId ? updater(b) : b)),
+  };
+}
+
+function updateFloorInProject(project: Project, floorId: string, updater: (floor: Floor) => Floor): Project {
+  const bid = findBuildingIdForFloor(project, floorId);
+  if (!bid) return project;
+  return updateBuildingInProject(project, bid, (b) => ({
+    ...b,
+    floors: b.floors.map((f) => (f.id === floorId ? updater(f) : f)),
+  }));
+}
+
+function updateWallInFloor(floor: Floor, wallId: string, updater: (wall: Wall) => Wall): Floor {
+  return { ...floor, walls: floor.walls.map((w) => (w.id === wallId ? updater(w) : w)) };
 }
 
 // ---------------------------------------------------------------------------
@@ -39,7 +78,11 @@ export interface VisibilityState {
 interface ConfiguratorState {
   project: Project;
   viewMode: ViewMode;
+  activeBuildingId: string | null;
   activeFloorId: string | null;
+  /** Wspólny indeks kondygnacji (Floor.level) dla planu sytuacyjnego. */
+  sharedFloorLevel: number;
+  sitePlanMode: boolean;
   selectedWallId: string | null;
   theme: "light" | "dark";
   show3D: boolean;
@@ -66,6 +109,15 @@ interface ConfiguratorState {
   setDefaults: (defaults: Partial<ProjectDefaults>) => void;
   setBackWallEnabled: (enabled: boolean) => void;
   resetProject: () => void;
+
+  setActiveBuilding: (id: string | null) => void;
+  addBuilding: () => void;
+  removeBuilding: (id: string) => void;
+  duplicateBuilding: (id: string) => void;
+  renameBuilding: (id: string, name: string) => void;
+  setBuildingPosition: (id: string, position: Point) => void;
+  setSitePlanMode: (v: boolean) => void;
+  setSharedFloorLevel: (level: number) => void;
 
   setActiveFloor: (id: string | null) => void;
   addFloor: (name?: string) => void;
@@ -130,61 +182,6 @@ interface ConfiguratorState {
 }
 
 // ---------------------------------------------------------------------------
-// Default project factory
-// ---------------------------------------------------------------------------
-
-function createDefaultProject(): Project {
-  const parterId = crypto.randomUUID();
-  return {
-    id: crypto.randomUUID(),
-    name: "Nowy projekt CLT",
-    defaults: {
-      extWallType: "CLT_120_EXT",
-      intWallType: "CLT_100_INT",
-      slabType: "CLT_160_SLAB",
-      roofType: "CLT_120_ROOF",
-      wallHeight: 2800,
-    },
-    floors: [
-      {
-        id: parterId,
-        name: "Parter",
-        level: 0,
-        height: 2800,
-        walls: [
-          { id: crypto.randomUUID(), type: "CLT_120_EXT", category: "external", label: "Front", start: { x: 0, y: 0 }, end: { x: 10000, y: 0 }, height: 2800, openings: [] },
-          { id: crypto.randomUUID(), type: "CLT_120_EXT", category: "external", label: "Lewa", start: { x: 10000, y: 0 }, end: { x: 10000, y: 6000 }, height: 2800, openings: [] },
-          { id: crypto.randomUUID(), type: "CLT_120_EXT", category: "external", label: "Tylna", start: { x: 10000, y: 6000 }, end: { x: 0, y: 6000 }, height: 2800, openings: [] },
-          { id: crypto.randomUUID(), type: "CLT_120_EXT", category: "external", label: "Prawa", start: { x: 0, y: 6000 }, end: { x: 0, y: 0 }, height: 2800, openings: [] },
-        ],
-        slabThickness: 0,
-        slabShape: { mode: "outline", cutouts: [] },
-      },
-    ],
-    roof: null,
-    gableWalls: [
-      { id: crypto.randomUUID(), side: "left", option: "fixed", openings: [] },
-      { id: crypto.randomUUID(), side: "right", option: "fixed", openings: [] },
-    ],
-    backWallEnabled: true,
-    stairs: [],
-    createdAt: new Date().toISOString(),
-  };
-}
-
-// ---------------------------------------------------------------------------
-// Immutable update helpers
-// ---------------------------------------------------------------------------
-
-function updateFloorInProject(project: Project, floorId: string, updater: (floor: Floor) => Floor): Project {
-  return { ...project, floors: project.floors.map((f) => (f.id === floorId ? updater(f) : f)) };
-}
-
-function updateWallInFloor(floor: Floor, wallId: string, updater: (wall: Wall) => Wall): Floor {
-  return { ...floor, walls: floor.walls.map((w) => (w.id === wallId ? updater(w) : w)) };
-}
-
-// ---------------------------------------------------------------------------
 // Preset builders (vertex-based)
 // ---------------------------------------------------------------------------
 
@@ -244,7 +241,10 @@ function createInitialCatalogOverrides(): CatalogOverrides {
 export const useStore = create<ConfiguratorState>((set, get) => ({
   project: createDefaultProject(),
   viewMode: "floorplan",
+  activeBuildingId: null,
   activeFloorId: null,
+  sharedFloorLevel: 0,
+  sitePlanMode: true,
   selectedWallId: null,
   theme: "light",
   show3D: false,
@@ -284,13 +284,20 @@ export const useStore = create<ConfiguratorState>((set, get) => ({
   setDefaults: (defaults) => set((s) => ({
     project: { ...s.project, defaults: { ...s.project.defaults, ...defaults } },
   })),
-  setBackWallEnabled: (enabled) => set((s) => ({
-    project: { ...s.project, backWallEnabled: enabled },
-  })),
+  setBackWallEnabled: (enabled) => set((s) => {
+    const b = getActiveBuilding(s.project, s.activeBuildingId);
+    if (!b) return s;
+    return {
+      project: updateBuildingInProject(s.project, b.id, (x) => ({ ...x, backWallEnabled: enabled })),
+    };
+  }),
   resetProject: () => set({
     project: createDefaultProject(),
     viewMode: "floorplan",
+    activeBuildingId: null,
     activeFloorId: null,
+    sharedFloorLevel: 0,
+    sitePlanMode: true,
     selectedWallId: null,
     drawTool: "select" as DrawTool,
     drawWallCategory: "external",
@@ -302,11 +309,88 @@ export const useStore = create<ConfiguratorState>((set, get) => ({
     redoStack: [],
   }),
 
+  setActiveBuilding: (id) => set((s) => {
+    if (id === null) return { activeBuildingId: null };
+    const b = s.project.buildings.find((x) => x.id === id);
+    if (!b) return s;
+    const match = b.floors.find((f) => f.level === s.sharedFloorLevel);
+    const floor = match ?? b.floors[0];
+    return {
+      activeBuildingId: id,
+      activeFloorId: floor?.id ?? null,
+      sharedFloorLevel: floor?.level ?? s.sharedFloorLevel,
+    };
+  }),
+
+  addBuilding: () => set((s) => {
+    const idx = s.project.buildings.length;
+    const nb = createDefaultBuilding(`Budynek ${idx + 1}`, { x: 15000 * idx, y: 0 });
+    return {
+      project: { ...s.project, buildings: [...s.project.buildings, nb] },
+      activeBuildingId: nb.id,
+      activeFloorId: nb.floors[0]?.id ?? null,
+      sharedFloorLevel: 0,
+    };
+  }),
+
+  removeBuilding: (id) => set((s) => {
+    if (s.project.buildings.length <= 1) return s;
+    const rest = s.project.buildings.filter((b) => b.id !== id);
+    const removed = s.project.buildings.find((b) => b.id === id);
+    const nextActive = s.activeBuildingId === id
+      ? rest[0]?.id ?? null
+      : s.activeBuildingId;
+    const nb = getActiveBuilding({ ...s.project, buildings: rest }, nextActive);
+    const floor = nb?.floors.find((f) => f.level === s.sharedFloorLevel) ?? nb?.floors[0];
+    return {
+      project: { ...s.project, buildings: rest },
+      activeBuildingId: nextActive,
+      activeFloorId: s.activeBuildingId === id ? (floor?.id ?? null) : s.activeFloorId,
+      selectedWallId: removed?.floors.some((f) => f.walls.some((w) => w.id === s.selectedWallId)) ? null : s.selectedWallId,
+      selectedStairId: removed?.stairs.some((st) => st.id === s.selectedStairId) ? null : s.selectedStairId,
+    };
+  }),
+
+  duplicateBuilding: (buildingId) => set((s) => {
+    const source = s.project.buildings.find((b) => b.id === buildingId);
+    if (!source) return s;
+    const nb = duplicateBuildingStructure(source);
+    return {
+      project: { ...s.project, buildings: [...s.project.buildings, nb] },
+      activeBuildingId: nb.id,
+      activeFloorId: nb.floors[0]?.id ?? null,
+      sharedFloorLevel: nb.floors[0]?.level ?? 0,
+    };
+  }),
+
+  renameBuilding: (id, name) => set((s) => ({
+    project: updateBuildingInProject(s.project, id, (b) => ({ ...b, name })),
+  })),
+
+  setBuildingPosition: (id, position) => set((s) => ({
+    project: updateBuildingInProject(s.project, id, (b) => ({ ...b, position: { ...position } })),
+  })),
+
+  setSitePlanMode: (v) => set({ sitePlanMode: v }),
+  setSharedFloorLevel: (level) => set({ sharedFloorLevel: level }),
+
   // --- Kondygnacje ---
-  setActiveFloor: (id) => set({ activeFloorId: id }),
+  setActiveFloor: (id) => set((s) => {
+    if (id === null) return { activeFloorId: null };
+    const bid = findBuildingIdForFloor(s.project, id);
+    const building = bid ? s.project.buildings.find((b) => b.id === bid) : undefined;
+    const floor = building?.floors.find((f) => f.id === id);
+    return {
+      activeFloorId: id,
+      activeBuildingId: bid ?? s.activeBuildingId,
+      sharedFloorLevel: floor?.level ?? s.sharedFloorLevel,
+    };
+  }),
 
   addFloor: (name) => set((s) => {
-    const level = s.project.floors.length;
+    const b = getActiveBuilding(s.project, s.activeBuildingId);
+    if (!b) return s;
+    const level = b.floors.length;
     const newFloor: Floor = {
       id: crypto.randomUUID(),
       name: name ?? `Piętro ${level}`,
@@ -317,15 +401,23 @@ export const useStore = create<ConfiguratorState>((set, get) => ({
       slabShape: { mode: "outline", cutouts: [] },
     };
     return {
-      project: { ...s.project, floors: [...s.project.floors, newFloor] },
+      project: updateBuildingInProject(s.project, b.id, (x) => ({
+        ...x,
+        floors: [...x.floors, newFloor],
+      })),
       activeFloorId: newFloor.id,
+      sharedFloorLevel: level,
     };
   }),
 
   duplicateFloor: (sourceFloorId) => set((s) => {
-    const source = s.project.floors.find((f) => f.id === sourceFloorId);
+    const bid = findBuildingIdForFloor(s.project, sourceFloorId);
+    if (!bid) return s;
+    const building = s.project.buildings.find((b) => b.id === bid);
+    if (!building) return s;
+    const source = building.floors.find((f) => f.id === sourceFloorId);
     if (!source) return s;
-    const level = s.project.floors.length;
+    const level = building.floors.length;
     const newFloor: Floor = {
       ...structuredClone(source),
       id: crypto.randomUUID(),
@@ -351,18 +443,51 @@ export const useStore = create<ConfiguratorState>((set, get) => ({
       })),
     };
     return {
-      project: { ...s.project, floors: [...s.project.floors, newFloor] },
+      project: updateBuildingInProject(s.project, bid, (x) => ({
+        ...x,
+        floors: [...x.floors, newFloor],
+      })),
       activeFloorId: newFloor.id,
+      sharedFloorLevel: level,
     };
   }),
 
-  removeFloor: (id) => set((s) => ({
-    project: {
-      ...s.project,
-      floors: s.project.floors.filter((f) => f.id !== id).map((f, i) => ({ ...f, level: i })),
-    },
-    activeFloorId: s.activeFloorId === id ? null : s.activeFloorId,
-  })),
+  removeFloor: (id) => set((s) => {
+    const bid = findBuildingIdForFloor(s.project, id);
+    if (!bid) return s;
+    const building = s.project.buildings.find((b) => b.id === bid);
+    if (!building || building.floors.length <= 1) return s;
+
+    const stairIdsToRemove = new Set(
+      building.stairs.filter((st) => st.fromFloorId === id || st.toFloorId === id).map((st) => st.id),
+    );
+    const newStairs = building.stairs.filter((st) => !stairIdsToRemove.has(st.id));
+
+    let proj: Project = updateBuildingInProject(s.project, bid, (b) => ({
+      ...b,
+      floors: b.floors.filter((f) => f.id !== id).map((f, i) => ({ ...f, level: i })),
+      stairs: newStairs,
+    }));
+
+    const remainingFloorIds = building.floors.filter((f) => f.id !== id).map((f) => f.id);
+    for (const fid of remainingFloorIds) {
+      proj = updateFloorInProject(proj, fid, (f) => ({
+        ...f,
+        slabShape: {
+          ...f.slabShape,
+          cutouts: f.slabShape.cutouts.filter(
+            (c) => !c.linkedStairId || !stairIdsToRemove.has(c.linkedStairId),
+          ),
+        },
+      }));
+    }
+
+    return {
+      project: proj,
+      activeFloorId: s.activeFloorId === id ? null : s.activeFloorId,
+      selectedStairId: s.selectedStairId && stairIdsToRemove.has(s.selectedStairId) ? null : s.selectedStairId,
+    };
+  }),
 
   updateFloor: (id, updates) => set((s) => ({
     project: updateFloorInProject(s.project, id, (f) => ({ ...f, ...updates })),
@@ -380,7 +505,7 @@ export const useStore = create<ConfiguratorState>((set, get) => ({
 
   updateWall: (floorId, wallId, updates) => set((s) => ({
     project: updateFloorInProject(s.project, floorId, (f) =>
-      updateWallInFloor(f, wallId, (w) => ({ ...w, ...updates }))
+      updateWallInFloor(f, wallId, (w) => ({ ...w, ...updates })),
     ),
   })),
 
@@ -395,7 +520,10 @@ export const useStore = create<ConfiguratorState>((set, get) => ({
     get().pushUndo();
     let splitPoint: Point | null = null;
     set((s) => {
-      const floor = s.project.floors.find((f) => f.id === floorId);
+      const bid = findBuildingIdForFloor(s.project, floorId);
+      if (!bid) return s;
+      const building = s.project.buildings.find((b) => b.id === bid);
+      const floor = building?.floors.find((f) => f.id === floorId);
       if (!floor) return s;
       const wall = floor.walls.find((w) => w.id === wallId);
       if (!wall) return s;
@@ -422,7 +550,10 @@ export const useStore = create<ConfiguratorState>((set, get) => ({
   },
 
   closeOutline: (floorId) => set((s) => {
-    const floor = s.project.floors.find((f) => f.id === floorId);
+    const bid = findBuildingIdForFloor(s.project, floorId);
+    if (!bid) return s;
+    const building = s.project.buildings.find((b) => b.id === bid);
+    const floor = building?.floors.find((f) => f.id === floorId);
     if (!floor) return s;
     const extWalls = floor.walls.filter((w) => w.category === "external");
     const closing = computeClosingWall(extWalls);
@@ -455,7 +586,10 @@ export const useStore = create<ConfiguratorState>((set, get) => ({
 
   applyPreset: (floorId, preset) => set((s) => {
     get().pushUndo();
-    const floor = s.project.floors.find((f) => f.id === floorId);
+    const bid = findBuildingIdForFloor(s.project, floorId);
+    if (!bid) return s;
+    const building = s.project.buildings.find((b) => b.id === bid);
+    const floor = building?.floors.find((f) => f.id === floorId);
     if (!floor) return s;
     const h = floor.height;
     const ext = s.project.defaults.extWallType;
@@ -497,7 +631,7 @@ export const useStore = create<ConfiguratorState>((set, get) => ({
     project: updateFloorInProject(s.project, floorId, (f) =>
       updateWallInFloor(f, wallId, (w) => ({
         ...w, openings: [...w.openings, { ...opening, id: crypto.randomUUID() }],
-      }))
+      })),
     ),
   })),
 
@@ -505,7 +639,7 @@ export const useStore = create<ConfiguratorState>((set, get) => ({
     project: updateFloorInProject(s.project, floorId, (f) =>
       updateWallInFloor(f, wallId, (w) => ({
         ...w, openings: w.openings.map((o) => (o.id === openingId ? { ...o, ...updates } : o)),
-      }))
+      })),
     ),
   })),
 
@@ -513,49 +647,69 @@ export const useStore = create<ConfiguratorState>((set, get) => ({
     project: updateFloorInProject(s.project, floorId, (f) =>
       updateWallInFloor(f, wallId, (w) => ({
         ...w, openings: w.openings.filter((o) => o.id !== openingId),
-      }))
+      })),
     ),
   })),
 
   // --- Dach ---
-  setRoof: (roofData) => set((s) => ({
-    project: {
-      ...s.project,
-      roof: roofData ? { ...roofData, id: crypto.randomUUID(), anomalies: [] } : null,
-    },
-  })),
+  setRoof: (roofData) => set((s) => {
+    const b = getActiveBuilding(s.project, s.activeBuildingId);
+    if (!b) return s;
+    return {
+      project: updateBuildingInProject(s.project, b.id, (x) => ({
+        ...x,
+        roof: roofData ? { ...roofData, id: crypto.randomUUID(), anomalies: [] } : null,
+      })),
+    };
+  }),
 
   updateRoof: (updates) => set((s) => {
-    if (!s.project.roof) return s;
-    return { project: { ...s.project, roof: { ...s.project.roof, ...updates } } };
+    const b = getActiveBuilding(s.project, s.activeBuildingId);
+    if (!b?.roof) return s;
+    return {
+      project: updateBuildingInProject(s.project, b.id, (x) => ({
+        ...x,
+        roof: x.roof ? { ...x.roof, ...updates } : null,
+      })),
+    };
   }),
 
   addRoofAnomaly: (anomaly) => set((s) => {
-    if (!s.project.roof) return s;
+    const b = getActiveBuilding(s.project, s.activeBuildingId);
+    if (!b?.roof) return s;
     return {
-      project: {
-        ...s.project,
-        roof: { ...s.project.roof, anomalies: [...s.project.roof.anomalies, { ...anomaly, id: crypto.randomUUID() }] },
-      },
+      project: updateBuildingInProject(s.project, b.id, (x) => ({
+        ...x,
+        roof: x.roof
+          ? { ...x.roof, anomalies: [...x.roof.anomalies, { ...anomaly, id: crypto.randomUUID() }] }
+          : null,
+      })),
     };
   }),
 
   removeRoofAnomaly: (id) => set((s) => {
-    if (!s.project.roof) return s;
+    const b = getActiveBuilding(s.project, s.activeBuildingId);
+    if (!b?.roof) return s;
     return {
-      project: {
-        ...s.project,
-        roof: { ...s.project.roof, anomalies: s.project.roof.anomalies.filter((a) => a.id !== id) },
-      },
+      project: updateBuildingInProject(s.project, b.id, (x) => ({
+        ...x,
+        roof: x.roof
+          ? { ...x.roof, anomalies: x.roof.anomalies.filter((a) => a.id !== id) }
+          : null,
+      })),
     };
   }),
 
-  updateGableWall: (side, updates) => set((s) => ({
-    project: {
-      ...s.project,
-      gableWalls: s.project.gableWalls.map((g) => g.side === side ? { ...g, ...updates } : g),
-    },
-  })),
+  updateGableWall: (side, updates) => set((s) => {
+    const b = getActiveBuilding(s.project, s.activeBuildingId);
+    if (!b) return s;
+    return {
+      project: updateBuildingInProject(s.project, b.id, (x) => ({
+        ...x,
+        gableWalls: x.gableWalls.map((g) => (g.side === side ? { ...g, ...updates } : g)),
+      })),
+    };
+  }),
 
   // --- Strop hybrydowy ---
   setSlabEdit: (v) => set({ slabEdit: v }),
@@ -563,7 +717,10 @@ export const useStore = create<ConfiguratorState>((set, get) => ({
   detachSlab: (floorId) => {
     get().pushUndo();
     set((s) => {
-      const floor = s.project.floors.find((f) => f.id === floorId);
+      const bid = findBuildingIdForFloor(s.project, floorId);
+      if (!bid) return s;
+      const building = s.project.buildings.find((b) => b.id === bid);
+      const floor = building?.floors.find((f) => f.id === floorId);
       if (!floor) return s;
       const verts =
         floor.slabShape.vertices ??
@@ -640,7 +797,10 @@ export const useStore = create<ConfiguratorState>((set, get) => ({
 
   moveSlabVertex: (floorId, idx, newPoint) => {
     set((s) => {
-      const floor = s.project.floors.find((f) => f.id === floorId);
+      const bid = findBuildingIdForFloor(s.project, floorId);
+      if (!bid) return s;
+      const building = s.project.buildings.find((b) => b.id === bid);
+      const floor = building?.floors.find((f) => f.id === floorId);
       if (!floor || floor.slabShape.mode !== "detached" || !floor.slabShape.vertices) return s;
       const verts = floor.slabShape.vertices.map((v, i) =>
         i === idx ? { ...newPoint } : v,
@@ -659,9 +819,13 @@ export const useStore = create<ConfiguratorState>((set, get) => ({
     get().pushUndo();
     const id = crypto.randomUUID();
     set((s) => {
-      let project = { ...s.project, stairs: [...s.project.stairs, { ...stair, id }] };
-      // Auto-cutout w stropie piętra docelowego.
-      const toFloor = project.floors.find((f) => f.id === stair.toFloorId);
+      const b = getActiveBuilding(s.project, s.activeBuildingId);
+      if (!b) return s;
+      let project: Project = updateBuildingInProject(s.project, b.id, (x) => ({
+        ...x,
+        stairs: [...x.stairs, { ...stair, id }],
+      }));
+      const toFloor = b.floors.find((f) => f.id === stair.toFloorId);
       if (toFloor) {
         const footprint = computeStairFootprintLocal({ ...stair, id });
         project = updateFloorInProject(project, toFloor.id, (f) => ({
@@ -688,16 +852,17 @@ export const useStore = create<ConfiguratorState>((set, get) => ({
 
   updateStair: (stairId, updates) => {
     set((s) => {
-      const old = s.project.stairs.find((st) => st.id === stairId);
+      const building = s.project.buildings.find((b) => b.stairs.some((st) => st.id === stairId));
+      if (!building) return s;
+      const old = building.stairs.find((st) => st.id === stairId);
       if (!old) return s;
       const merged: Stair = { ...old, ...updates };
-      let project = {
-        ...s.project,
-        stairs: s.project.stairs.map((st) => (st.id === stairId ? merged : st)),
-      };
-      // Odśwież linked cutout w toFloor.
+      let project: Project = updateBuildingInProject(s.project, building.id, (b) => ({
+        ...b,
+        stairs: b.stairs.map((st) => (st.id === stairId ? merged : st)),
+      }));
       const footprint = computeStairFootprintLocal(merged);
-      for (const f of project.floors) {
+      for (const f of building.floors) {
         const hasLinked = f.slabShape.cutouts.some((c) => c.linkedStairId === stairId);
         if (!hasLinked) continue;
         const keepInThisFloor = f.id === merged.toFloorId;
@@ -715,9 +880,11 @@ export const useStore = create<ConfiguratorState>((set, get) => ({
           },
         }));
       }
-      // Jeśli zmieniono toFloor a nie ma cutoutu w nowym toFloor, dodaj.
-      const newToFloor = project.floors.find((f) => f.id === merged.toFloorId);
-      if (newToFloor && !newToFloor.slabShape.cutouts.some((c) => c.linkedStairId === stairId)) {
+      const newToFloor = building.floors.find((f) => f.id === merged.toFloorId);
+      if (
+        newToFloor &&
+        !newToFloor.slabShape.cutouts.some((c) => c.linkedStairId === stairId)
+      ) {
         project = updateFloorInProject(project, newToFloor.id, (fl) => ({
           ...fl,
           slabShape: {
@@ -742,11 +909,13 @@ export const useStore = create<ConfiguratorState>((set, get) => ({
   removeStair: (stairId) => {
     get().pushUndo();
     set((s) => {
-      let project = {
-        ...s.project,
-        stairs: s.project.stairs.filter((st) => st.id !== stairId),
-      };
-      for (const f of project.floors) {
+      const building = s.project.buildings.find((b) => b.stairs.some((st) => st.id === stairId));
+      if (!building) return s;
+      let project: Project = updateBuildingInProject(s.project, building.id, (b) => ({
+        ...b,
+        stairs: b.stairs.filter((st) => st.id !== stairId),
+      }));
+      for (const f of building.floors) {
         if (!f.slabShape.cutouts.some((c) => c.linkedStairId === stairId)) continue;
         project = updateFloorInProject(project, f.id, (fl) => ({
           ...fl,
@@ -769,7 +938,6 @@ export const useStore = create<ConfiguratorState>((set, get) => ({
   updateWallCatalog: (type, patch) => set((s) => {
     const existing = s.catalogOverrides.walls[type];
     if (!existing) {
-      // Override bazowego wpisu — pobierz snapshot z bazy i nałóż patch.
       const baseEntry = BASE_WALL_CATALOG[type];
       if (!baseEntry) return s;
       return {
@@ -887,18 +1055,26 @@ export const useStore = create<ConfiguratorState>((set, get) => ({
 }));
 
 // ---------------------------------------------------------------------------
-// Selektor aktywnego piętra
+// Selektory aktywnego budynku / piętra
 // ---------------------------------------------------------------------------
+
+export function useActiveBuilding(): Building | undefined {
+  const project = useStore((s) => s.project);
+  const activeBuildingId = useStore((s) => s.activeBuildingId);
+  return getActiveBuilding(project, activeBuildingId);
+}
 
 export function useActiveFloor(): Floor | undefined {
   const project = useStore((s) => s.project);
   const activeFloorId = useStore((s) => s.activeFloorId);
-  if (activeFloorId) return project.floors.find((f) => f.id === activeFloorId);
-  return project.floors[0];
+  const activeBuildingId = useStore((s) => s.activeBuildingId);
+  const b = getActiveBuilding(project, activeBuildingId);
+  const floors = b?.floors ?? [];
+  if (activeFloorId) return floors.find((f) => f.id === activeFloorId);
+  return floors[0];
 }
 
 // ---------------------------------------------------------------------------
 // Bind katalogu runtime: `lib/catalog.ts` czyta override'y z tego store'a.
-// Robimy to raz, przy pierwszym imporcie store'a.
 // ---------------------------------------------------------------------------
 __bindCatalogOverrides(() => useStore.getState().catalogOverrides);

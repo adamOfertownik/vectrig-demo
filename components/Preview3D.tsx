@@ -17,7 +17,7 @@ import {
   type WallProfilePoint,
   type RoofBounds,
 } from "@/lib/geometry";
-import type { Project, Floor, Wall, Roof, Stair } from "@/lib/types";
+import type { Project, Floor, Wall, Roof, Stair, Building } from "@/lib/types";
 import { resolveOpeningMm } from "@/lib/openings";
 import * as THREE from "three";
 
@@ -50,7 +50,9 @@ export default function Preview3D() {
           shadow-mapSize-height={2048}
         />
         <Suspense fallback={null}>
-          <HouseModel project={project} />
+          {project.buildings.map((b) => (
+            <BuildingModel key={b.id} building={b} project={project} />
+          ))}
           <Ground theme={theme} />
         </Suspense>
       </Canvas>
@@ -97,25 +99,29 @@ function LayerTogglesOverlay() {
         />
         <span>Dach</span>
       </label>
-      {project.floors.length > 0 && (
+      {project.buildings.some((b) => b.floors.length > 0) && (
         <>
           <div className="border-t border-border pt-2 text-[10px] uppercase tracking-wider text-muted font-semibold">
             Piętra
           </div>
-          {project.floors.map((f) => {
-            const visible = !visibility.floorHidden[f.id];
-            return (
-              <label key={f.id} className="flex items-center gap-2 cursor-pointer">
-                <input
-                  type="checkbox"
-                  checked={visible}
-                  onChange={() => toggleFloorVisible(f.id)}
-                  className="w-3.5 h-3.5 accent-accent"
-                />
-                <span>{f.name}</span>
-              </label>
-            );
-          })}
+          {project.buildings.flatMap((b) =>
+            b.floors.map((f) => {
+              const visible = !visibility.floorHidden[f.id];
+              return (
+                <label key={f.id} className="flex items-center gap-2 cursor-pointer">
+                  <input
+                    type="checkbox"
+                    checked={visible}
+                    onChange={() => toggleFloorVisible(f.id)}
+                    className="w-3.5 h-3.5 accent-accent"
+                  />
+                  <span className="truncate" title={`${b.name} — ${f.name}`}>
+                    {b.name} — {f.name}
+                  </span>
+                </label>
+              );
+            }),
+          )}
         </>
       )}
     </div>
@@ -134,46 +140,47 @@ function Ground({ theme }: { theme: string }) {
   );
 }
 
-function HouseModel({ project }: { project: Project }) {
+function BuildingModel({ building, project }: { building: Building; project: Project }) {
   const visibility = useStore((s) => s.visibility);
-  const centerOffset = useMemo(() => {
-    const firstFloor = project.floors[0];
-    if (!firstFloor) return { x: 0, z: 0 };
-    const extWalls = firstFloor.walls.filter((w) => w.category === "external");
-    const positions = computeFloorPlanPositions(extWalls);
-    const bounds = computeBounds(positions);
-    return {
-      x: bounds.centerX * MM_TO_M,
-      z: bounds.centerY * MM_TO_M,
-    };
-  }, [project]);
+  const px = building.position.x * MM_TO_M;
+  const pz = building.position.y * MM_TO_M;
 
   return (
-    <group position={[-centerOffset.x, 0, -centerOffset.z]}>
-      {project.floors.map((floor) =>
+    <group position={[px, 0, pz]}>
+      {building.floors.map((floor) =>
         visibility.floorHidden[floor.id] ? null : (
-          <FloorGroup key={floor.id} floor={floor} project={project} />
-        )
+          <FloorGroup key={floor.id} floor={floor} building={building} project={project} />
+        ),
       )}
-      {project.stairs.map((s) => (
-        <StairMesh key={s.id} stair={s} project={project} />
+      {building.stairs.map((s) => (
+        <StairMesh key={s.id} stair={s} building={building} project={project} />
       ))}
-      {project.roof && visibility.roof && <RoofMesh roof={project.roof} project={project} />}
+      {building.roof && visibility.roof && (
+        <RoofMesh roof={building.roof} building={building} project={project} />
+      )}
     </group>
   );
 }
 
-function FloorGroup({ floor, project }: { floor: Floor; project: Project }) {
+function FloorGroup({
+  floor,
+  building,
+  project,
+}: {
+  floor: Floor;
+  building: Building;
+  project: Project;
+}) {
   const visibility = useStore((s) => s.visibility);
   const baseY = useMemo(() => {
     let y = 0;
-    for (const f of project.floors) {
+    for (const f of building.floors) {
       if (f.id === floor.id) break;
       y += f.height * MM_TO_M;
       if (f.level > 0) y += f.slabThickness * MM_TO_M;
     }
     return y;
-  }, [floor, project]);
+  }, [floor, building.floors]);
 
   const extWalls = useMemo(
     () => floor.walls.filter((w) => w.category === "external"),
@@ -186,7 +193,7 @@ function FloorGroup({ floor, project }: { floor: Floor; project: Project }) {
   const extPositions = useMemo(() => computeFloorPlanPositions(extWalls), [extWalls]);
   const intPositions = useMemo(() => computeFloorPlanPositions(intWalls), [intWalls]);
 
-  const isTopFloor = project.floors[project.floors.length - 1]?.id === floor.id;
+  const isTopFloor = building.floors[building.floors.length - 1]?.id === floor.id;
   const roofBounds = useMemo(() => computeBounds(extPositions), [extPositions]);
 
   return (
@@ -203,8 +210,8 @@ function FloorGroup({ floor, project }: { floor: Floor; project: Project }) {
       {visibility.walls &&
         extPositions.map((wp, idx) => {
           const profile =
-            isTopFloor && project.roof
-              ? wallRoofProfile(wp.wall, project.roof, roofBounds)
+            isTopFloor && building.roof
+              ? wallRoofProfile(wp.wall, building.roof, roofBounds)
               : null;
           return (
             <WallMesh3D
@@ -213,8 +220,8 @@ function FloorGroup({ floor, project }: { floor: Floor; project: Project }) {
               wallPos={wp}
               roofProfile={profile}
               roofClip={
-                isTopFloor && project.roof
-                  ? { roof: project.roof, bounds: roofBounds }
+                isTopFloor && building.roof
+                  ? { roof: building.roof, bounds: roofBounds }
                   : undefined
               }
             />
@@ -380,25 +387,33 @@ function SlabMesh({
   );
 }
 
-function StairMesh({ stair, project }: { stair: Stair; project: Project }) {
+function StairMesh({
+  stair,
+  building,
+  project,
+}: {
+  stair: Stair;
+  building: Building;
+  project: Project;
+}) {
   const baseY = useMemo(() => {
     let y = 0;
-    for (const f of project.floors) {
+    for (const f of building.floors) {
       if (f.id === stair.fromFloorId) break;
       y += f.height * MM_TO_M;
       if (f.level > 0) y += f.slabThickness * MM_TO_M;
     }
     return y;
-  }, [stair, project]);
+  }, [stair, building.floors]);
 
   const totalRise = useMemo(() => {
-    const fromFloor = project.floors.find((f) => f.id === stair.fromFloorId);
+    const fromFloor = building.floors.find((f) => f.id === stair.fromFloorId);
     if (!fromFloor) return 0;
-    const idx = project.floors.findIndex((f) => f.id === stair.toFloorId);
-    const toFloor = idx >= 0 ? project.floors[idx] : null;
+    const idx = building.floors.findIndex((f) => f.id === stair.toFloorId);
+    const toFloor = idx >= 0 ? building.floors[idx] : null;
     if (!toFloor) return fromFloor.height;
     return fromFloor.height + (toFloor.level > 0 ? toFloor.slabThickness : 0);
-  }, [stair, project]);
+  }, [stair, building.floors]);
 
   const steps = useMemo(() => stairStepBoxes(stair, totalRise), [stair, totalRise]);
 
@@ -429,9 +444,17 @@ function StairMesh({ stair, project }: { stair: Stair; project: Project }) {
   );
 }
 
-function RoofMesh({ roof, project }: { roof: Roof; project: Project }) {
+function RoofMesh({
+  roof,
+  building,
+  project,
+}: {
+  roof: Roof;
+  building: Building;
+  project: Project;
+}) {
   const geometry = useMemo(() => {
-    const topFloor = project.floors[project.floors.length - 1];
+    const topFloor = building.floors[building.floors.length - 1];
     if (!topFloor) return new THREE.BufferGeometry();
 
     const extWalls = topFloor.walls.filter((w) => w.category === "external");
@@ -455,7 +478,7 @@ function RoofMesh({ roof, project }: { roof: Roof; project: Project }) {
     const roofAnchorZ = minZ;
 
     let totalH = 0;
-    for (const f of project.floors) {
+    for (const f of building.floors) {
       totalH += f.height * MM_TO_M;
       if (f.level > 0) totalH += f.slabThickness * MM_TO_M;
     }
@@ -524,7 +547,7 @@ function RoofMesh({ roof, project }: { roof: Roof; project: Project }) {
     g.rotateY(-Math.PI / 2);
     g.translate(roofAnchorX, totalH, roofAnchorZ);
     return g;
-  }, [roof, project]);
+  }, [roof, building]);
 
   const roofCat = getWallEntry(project.defaults.roofType);
 

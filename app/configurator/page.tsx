@@ -119,7 +119,9 @@ export default function ConfiguratorPage() {
           break;
         case "Tab": {
           e.preventDefault();
-          const floors = state.project.floors;
+          const bid = state.activeBuildingId ?? state.project.buildings[0]?.id;
+          const building = state.project.buildings.find((b) => b.id === bid) ?? state.project.buildings[0];
+          const floors = building?.floors ?? [];
           if (floors.length < 2) break;
           const currentId = state.activeFloorId ?? floors[0]?.id;
           const idx = floors.findIndex((f) => f.id === currentId);

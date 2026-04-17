@@ -3,11 +3,13 @@
 import { NextResponse } from "next/server";
 import { generateDxf } from "@/lib/dxf-writer";
 import type { Project } from "@/lib/types";
+import { normalizeProject } from "@/lib/project-migrate";
 
 export async function POST(req: Request) {
   try {
-    const project = (await req.json()) as Project;
-    if (!project?.floors) {
+    const raw = await req.json();
+    const project = normalizeProject(raw) as Project;
+    if (!project?.buildings?.length) {
       return NextResponse.json({ error: "Invalid project" }, { status: 400 });
     }
     const dxf = generateDxf(project);

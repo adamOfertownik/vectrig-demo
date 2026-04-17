@@ -4,6 +4,7 @@ import { useStore } from "@/lib/store";
 import { getWallEntry } from "@/lib/catalog";
 import { wallLength } from "@/lib/geometry";
 import { splitProjectPanels, splitRoofForSchedule } from "@/lib/panel-split";
+import { allFloorsInProject } from "@/lib/project-migrate";
 
 export default function ScheduleView() {
   const project = useStore((s) => s.project);
@@ -33,7 +34,7 @@ export default function ScheduleView() {
     overSize: boolean;
   }> = [];
 
-  for (const floor of project.floors) {
+  for (const floor of allFloorsInProject(project)) {
     for (const wall of floor.walls) {
       const b = byWall.get(wall.id);
       if (!b) continue;
@@ -41,8 +42,9 @@ export default function ScheduleView() {
       sumMachiningS += b.machiningSeconds;
       sumJointMb += b.jointLengthMM / 1000;
       const cat = getWallEntry(wall.type);
+      const bname = project.buildings.find((bu) => bu.floors.some((fl) => fl.id === floor.id))?.name;
       rows.push({
-        floorName: floor.name,
+        floorName: bname ? `${bname} — ${floor.name}` : floor.name,
         wallLabel: wall.label,
         length: Math.round(wallLength(wall)),
         height: wall.height,

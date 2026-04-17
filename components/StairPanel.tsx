@@ -1,5 +1,6 @@
 "use client";
 
+import { useMemo } from "react";
 import { useStore } from "@/lib/store";
 import type { StairType } from "@/lib/types";
 
@@ -10,7 +11,16 @@ export default function StairPanel() {
   const updateStair = useStore((s) => s.updateStair);
   const removeStair = useStore((s) => s.removeStair);
 
-  const stair = project.stairs.find((s) => s.id === selectedStairId);
+  const stairCtx = useMemo(() => {
+    for (const b of project.buildings) {
+      const s = b.stairs.find((x) => x.id === selectedStairId);
+      if (s) return { stair: s, floors: b.floors };
+    }
+    return null;
+  }, [project, selectedStairId]);
+
+  const stair = stairCtx?.stair;
+  const stairFloors = stairCtx?.floors ?? [];
 
   if (!stair) {
     return (
@@ -22,8 +32,8 @@ export default function StairPanel() {
     );
   }
 
-  const fromFloor = project.floors.find((f) => f.id === stair.fromFloorId);
-  const toFloor = project.floors.find((f) => f.id === stair.toFloorId);
+  const fromFloor = stairFloors.find((f) => f.id === stair.fromFloorId);
+  const toFloor = stairFloors.find((f) => f.id === stair.toFloorId);
   const rise =
     (fromFloor?.height ?? 0) + (toFloor && toFloor.level > 0 ? toFloor.slabThickness : 0);
   const riser = stair.stepCount > 0 ? rise / stair.stepCount : 0;
@@ -67,7 +77,7 @@ export default function StairPanel() {
               onChange={(e) => updateStair(stair.id, { toFloorId: e.target.value })}
               className="w-full text-sm"
             >
-              {project.floors
+              {stairFloors
                 .filter((f) => f.id !== stair.fromFloorId)
                 .map((f) => (
                   <option key={f.id} value={f.id}>

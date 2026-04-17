@@ -1,7 +1,7 @@
 "use client";
 
 import { useState } from "react";
-import { useStore, useActiveFloor } from "@/lib/store";
+import { useStore, useActiveFloor, useActiveBuilding } from "@/lib/store";
 import {
   KIND_LABELS,
   KIND_ICONS,
@@ -15,7 +15,7 @@ import type { CatalogComponent } from "@/lib/types";
 import { wallLength, wallAngleDeg, computeBoundsFromWalls } from "@/lib/geometry";
 import { resolveOpeningMm } from "@/lib/openings";
 import { wallOpeningsPerimeterM } from "@/lib/pricing";
-import type { ComponentKind, WallType, Opening, Floor, Wall, Project } from "@/lib/types";
+import type { Building, ComponentKind, WallType, Opening, Floor, Wall } from "@/lib/types";
 
 const KINDS_ORDER: ComponentKind[] = [
   "window_fixed",
@@ -37,6 +37,7 @@ function groupComponents(): Record<ComponentKind, CatalogComponent[]> {
 
 export default function WallConfigPanel() {
   const floor = useActiveFloor();
+  const activeBuilding = useActiveBuilding();
   const project = useStore((s) => s.project);
   const selectedWallId = useStore((s) => s.selectedWallId);
   // Re-render gdy cennik w edytorze się zmieni.
@@ -115,18 +116,19 @@ export default function WallConfigPanel() {
     const ow = Math.min(comp.width, wLen);
     if (ow < 50) return;
 
-    const isTop = floor.id === project.floors[project.floors.length - 1]?.id;
+    const floors = activeBuilding?.floors ?? [];
+    const isTop = floor.id === floors[floors.length - 1]?.id;
     const b = computeBoundsFromWalls(
-      project.floors[0]?.walls.filter((w) => w.category === "external") ?? []
+      floors[0]?.walls.filter((w) => w.category === "external") ?? []
     );
-    const useRoof = isTop && wall.category === "external" && project.roof;
+    const useRoof = isTop && wall.category === "external" && activeBuilding?.roof;
 
     const ranges = wall.openings
       .map((op) => {
         const r = resolveOpeningMm(
           wall,
           op,
-          useRoof ? project.roof! : null,
+          useRoof ? activeBuilding!.roof! : null,
           useRoof ? b : null
         );
         return { start: r.position, end: r.position + r.width };
@@ -360,8 +362,8 @@ export default function WallConfigPanel() {
               const wLen = wallLength(wall);
               // Posortuj po pozycji — czytelniej
               const sorted = [...wall.openings].sort((a, b) => a.position - b.position);
-              const overlapIds = findOverlappingOpenings(wall, wall.openings, project, floor);
-              const outOfBoundsIds = findOutOfBounds(wall, wall.openings, wLen, wall.height, project, floor);
+              const overlapIds = findOverlappingOpenings(wall, wall.openings, activeBuilding, floor);
+              const outOfBoundsIds = findOutOfBounds(wall, wall.openings, wLen, wall.height, activeBuilding, floor);
               return (
                 <>
                   <div className="space-y-2">
@@ -429,12 +431,13 @@ function openingBounds(op: Opening): { w: number; h: number } {
   };
 }
 
-function roofClipForWall(wall: Wall, project: Project, floor: Floor) {
-  const isTop = floor.id === project.floors[project.floors.length - 1]?.id;
+function roofClipForWall(wall: Wall, building: Building | undefined, floor: Floor) {
+  const floors = building?.floors ?? [];
+  const isTop = floor.id === floors[floors.length - 1]?.id;
   const b = computeBoundsFromWalls(
-    project.floors[0]?.walls.filter((w) => w.category === "external") ?? []
+    floors[0]?.walls.filter((w) => w.category === "external") ?? []
   );
-  const roof = project.roof;
+  const roof = building?.roof ?? null;
   const useRoof = Boolean(isTop && wall.category === "external" && roof);
   return { roof: useRoof ? roof! : null, bounds: useRoof ? b : null };
 }
@@ -442,11 +445,11 @@ function roofClipForWall(wall: Wall, project: Project, floor: Floor) {
 function findOverlappingOpenings(
   wall: Wall,
   openings: Opening[],
-  project: Project,
+  building: Building | undefined,
   floor: Floor
 ): Set<string> {
   const bad = new Set<string>();
-  const { roof, bounds } = roofClipForWall(wall, project, floor);
+  const { roof, bounds } = roofClipForWall(wall, building, floor);
   const rects = openings.map((o) => resolveOpeningMm(wall, o, roof, bounds));
   for (let i = 0; i < openings.length; i++) {
     const ai = rects[i].position;
@@ -468,11 +471,11 @@ function findOutOfBounds(
   openings: Opening[],
   wallLen: number,
   wallH: number,
-  project: Project,
+  building: Building | undefined,
   floor: Floor
 ): Set<string> {
   const bad = new Set<string>();
-  const { roof, bounds } = roofClipForWall(wall, project, floor);
+  const { roof, bounds } = roofClipForWall(wall, building, floor);
   for (const op of openings) {
     const comp = findComponent(op.componentId);
     const rawW = op.customWidth ?? comp?.width ?? 0;

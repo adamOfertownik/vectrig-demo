@@ -1,7 +1,7 @@
 // lib/panel-split.ts — podział ścian na panele CLT z kalkulacją odpadów i obróbki
-import type { Wall, Project, Floor } from "./types";
+import type { Wall, Project, Floor, Building } from "./types";
 import { getWallEntry } from "./catalog";
-import { roofSurfaceAreaSqm } from "./roof-area";
+import { roofSurfaceAreaSqmForBuilding } from "./roof-area";
 import {
   wallLength,
   wallEffectiveHeight,
@@ -141,21 +141,23 @@ export function splitWallIntoPanels(wall: Wall, effectiveHeightMM?: number): Wal
   };
 }
 
-function wallEffectiveHeightInProject(wall: Wall, floor: Floor, project: Project): number {
-  const isTop = project.floors.length > 0 && project.floors[project.floors.length - 1].id === floor.id;
-  if (!isTop || !project.roof || wall.category !== "external") return wall.height;
+function wallEffectiveHeightInBuilding(wall: Wall, floor: Floor, building: Building): number {
+  const isTop = building.floors.length > 0 && building.floors[building.floors.length - 1].id === floor.id;
+  if (!isTop || !building.roof || wall.category !== "external") return wall.height;
   const extWalls = floor.walls.filter((w) => w.category === "external");
   const bounds: RoofBounds = computeBoundsFromWalls(extWalls);
-  return wallEffectiveHeight(wall, project.roof, bounds);
+  return wallEffectiveHeight(wall, building.roof, bounds);
 }
 
 /** Podział wszystkich ścian w projekcie na panele, uwzględniając szczyty dachu na górnym piętrze. */
 export function splitProjectPanels(project: Project): ProjectPanelSplit {
   const walls: WallPanelBreakdown[] = [];
-  for (const floor of project.floors) {
-    for (const w of floor.walls) {
-      const effH = wallEffectiveHeightInProject(w, floor, project);
-      walls.push(splitWallIntoPanels(w, effH));
+  for (const building of project.buildings) {
+    for (const floor of building.floors) {
+      for (const w of floor.walls) {
+        const effH = wallEffectiveHeightInBuilding(w, floor, building);
+        walls.push(splitWallIntoPanels(w, effH));
+      }
     }
   }
   return {
@@ -190,12 +192,12 @@ export interface RoofScheduleRow {
  * Szacunkowy podział powłoki dachu na panele ( uproszczony prostokąt reprezentatywnej połaci ).
  * Dla dwuspadowego: dwie równoważne połacie — sumy mnożone ×2.
  */
-export function splitRoofForSchedule(project: Project): RoofScheduleRow | null {
-  if (!project.roof) return null;
-  const areaSqm = roofSurfaceAreaSqm(project);
+function splitRoofForScheduleOneBuilding(project: Project, building: Building): RoofScheduleRow | null {
+  if (!building.roof) return null;
+  const areaSqm = roofSurfaceAreaSqmForBuilding(building);
   if (areaSqm <= 1e-6) return null;
 
-  const ground = project.floors[0];
+  const ground = building.floors[0];
   if (!ground) return null;
   const ext = ground.walls.filter((w) => w.category === "external");
   if (ext.length < 2) return null;
@@ -209,11 +211,11 @@ export function splitRoofForSchedule(project: Project): RoofScheduleRow | null {
   }
   const innerW = maxX - minX;
   const innerD = maxY - minY;
-  const ov = project.roof.overhang;
+  const ov = building.roof.overhang;
   const Wmm = innerW + 2 * ov;
-  const pitchRad = (project.roof.pitch * Math.PI) / 180;
+  const pitchRad = (building.roof.pitch * Math.PI) / 180;
   const cosP = Math.cos(pitchRad) || 1;
-  const roof = project.roof;
+  const roof = building.roof;
 
   let faces = 1;
   let eavesMm = Wmm;
@@ -263,4 +265,31 @@ export function splitRoofForSchedule(project: Project): RoofScheduleRow | null {
     totalWasteM3,
     totalMachiningSeconds,
   };
+}
+
+/** Zestawienie dachu — suma po budynkach z zdefiniowanym dachem. */
+export function splitRoofForSchedule(project: Project): RoofScheduleRow | null {
+  let acc: RoofScheduleRow | null = null;
+  for (const b of project.buildings) {
+    const row = splitRoofForScheduleOneBuilding(project, b);
+    if (!row) continue;
+    if (!acc) {
+      acc = { ...row };
+    } else {
+      const prev: RoofScheduleRow = acc;
+      acc = {
+        areaSqm: prev.areaSqm + row.areaSqm,
+        faces: prev.faces + row.faces,
+        eavesSpanMm: prev.eavesSpanMm,
+        slopeRunMm: prev.slopeRunMm,
+        typeShort: prev.typeShort,
+        faceBreakdown: prev.faceBreakdown,
+        totalPanels: prev.totalPanels + row.totalPanels,
+        totalJoints: prev.totalJoints + row.totalJoints,
+        totalWasteM3: prev.totalWasteM3 + row.totalWasteM3,
+        totalMachiningSeconds: prev.totalMachiningSeconds + row.totalMachiningSeconds,
+      };
+    }
+  }
+  return acc;
 }

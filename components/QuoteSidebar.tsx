@@ -148,7 +148,7 @@ function ExportDxfButton() {
   return (
     <button
       onClick={handleExport}
-      disabled={loading || project.floors.every((f) => f.walls.length === 0)}
+      disabled={loading || project.buildings.every((b) => b.floors.every((f) => f.walls.length === 0))}
       className="btn btn-primary w-full flex items-center justify-center gap-2"
     >
       {loading ? (
